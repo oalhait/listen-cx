@@ -31,14 +31,46 @@ function durationToMs(value: unknown): number {
   );
 }
 
-function musicSchema(html: string): any | null {
-  const match = html.match(/<script id="schema:music" type="application\/ld\+json">([\s\S]*?)<\/script>/);
-  if (!match) return null;
-  try {
-    return JSON.parse(match[1] ?? "");
-  } catch {
+function hasSchemaType(value: any, expected: string): boolean {
+  const types = Array.isArray(value?.["@type"]) ? value["@type"] : [value?.["@type"]];
+  return types.some(
+    (type: unknown) =>
+      typeof type === "string" &&
+      (type === expected || type.endsWith(`/${expected}`) || type.endsWith(`#${expected}`)),
+  );
+}
+
+function findMusicSchema(value: any): any | null {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const schema = findMusicSchema(item);
+      if (schema) return schema;
+    }
     return null;
   }
+  if (!value || typeof value !== "object") return null;
+  if (hasSchemaType(value, "MusicComposition") || hasSchemaType(value, "MusicRecording")) {
+    return value;
+  }
+  return findMusicSchema(value["@graph"]);
+}
+
+function musicSchema(html: string): any | null {
+  for (const match of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
+    const attributes = match[1] ?? "";
+    const contentType = attributes
+      .match(/\btype\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i)
+      ?.slice(1)
+      .find(Boolean);
+    if (contentType?.split(";", 1)[0]?.trim().toLowerCase() !== "application/ld+json") continue;
+    try {
+      const schema = findMusicSchema(JSON.parse(match[2] ?? ""));
+      if (schema) return schema;
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 export class ItunesClient {
@@ -82,9 +114,11 @@ export class ItunesClient {
     if (!res.ok) throw new Error(`itunes lookup: ${lookupStatus}; apple page: ${res.status}`);
 
     const schema = musicSchema(await res.text());
-    const recording = schema?.audio;
+    const recording = hasSchemaType(schema, "MusicRecording") ? schema : schema?.audio;
     const title = recording?.name ?? schema?.name;
-    const artists = (recording?.byArtist ?? schema?.byArtist ?? [])
+    const byArtist = recording?.byArtist ?? schema?.byArtist;
+    const artistValues = Array.isArray(byArtist) ? byArtist : byArtist ? [byArtist] : [];
+    const artists = artistValues
       .map((artist: any) => artist?.name)
       .filter((name: unknown): name is string => typeof name === "string" && name.length > 0);
     const trackViewUrl = schema?.url ?? recording?.url;

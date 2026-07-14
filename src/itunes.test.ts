@@ -63,4 +63,40 @@ describe("ItunesClient", () => {
       artworkUrl: "https://img.test/always-lone.jpg",
     });
   });
+
+  it("finds music metadata by schema type instead of Apple script formatting", async () => {
+    const schema = {
+      "@type": "MusicComposition",
+      name: "Get It Together",
+      url: "https://music.apple.com/us/song/get-it-together/1443810922",
+      timeRequired: "PT4M51S",
+      image: "https://img.test/get-it-together.jpg",
+      audio: {
+        "@type": ["Thing", "https://schema.org/MusicRecording"],
+        name: "Get It Together",
+        duration: "PT4M51S",
+        byArtist: { "@type": "MusicGroup", name: "702" },
+      },
+    };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 403 }))
+      .mockResolvedValueOnce(
+        new Response(
+          `<script type="application/ld+json">${JSON.stringify({ "@type": "BreadcrumbList" })}</script>` +
+            `<script id=schema:song type="application/ld+json; charset=utf-8">${JSON.stringify(schema)}</script>`,
+        ),
+      );
+
+    const track = await new ItunesClient(fetcher).lookupById("1443810922", "us");
+
+    expect(track).toEqual({
+      trackId: 1443810922,
+      title: "Get It Together",
+      artist: "702",
+      durationMs: 291000,
+      trackViewUrl: "https://music.apple.com/us/song/get-it-together/1443810922",
+      artworkUrl: "https://img.test/get-it-together.jpg",
+    });
+  });
 });
