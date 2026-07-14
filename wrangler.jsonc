@@ -39,9 +39,14 @@
   "env": {
     "staging": {
       "name": "listen-cx-staging",
-      "routes": [],
+      "routes": [
+        {
+          "pattern": "staging.listen.cx",
+          "custom_domain": true
+        }
+      ],
       "vars": {
-        "BASE_URL": ""
+        "BASE_URL": "https://staging.listen.cx"
       },
       "d1_databases": [
         {
