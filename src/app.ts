@@ -11,14 +11,23 @@ const MAX_CREATE_BODY_BYTES = 4096;
 const BOT_UA =
   /bot|crawler|spider|facebookexternalhit|twitterbot|slackbot|discordbot|whatsapp|telegram|linkedinbot|applebot|imessage|preview/i;
 
+function appleMusicDeepLink(url: URL): string {
+  if (url.hostname === "itunes.apple.com" || url.hostname === "geo.music.apple.com") {
+    url.hostname = "music.apple.com";
+  }
+  return url.toString().replace(/^https:/, "music:");
+}
+
 function providerTarget(
   row: LinkRow,
   provider: "spotify" | "apple",
 ): { url: string; isExactMatch: boolean } {
-  const fallback =
+  const fallbackUrl =
     provider === "spotify"
       ? spotifySearchUrl(row.title, row.artist)
       : appleSearchUrl(row.title, row.artist);
+  const fallback =
+    provider === "apple" ? appleMusicDeepLink(new URL(fallbackUrl)) : fallbackUrl;
   const candidate = provider === "spotify" ? row.spotify_url : row.apple_url;
   if (!candidate) return { url: fallback, isExactMatch: false };
 
@@ -31,7 +40,10 @@ function providerTarget(
           url.hostname === "geo.music.apple.com" ||
           url.hostname === "itunes.apple.com";
     return url.protocol === "https:" && validHost
-      ? { url: url.toString(), isExactMatch: true }
+      ? {
+          url: provider === "apple" ? appleMusicDeepLink(url) : url.toString(),
+          isExactMatch: true,
+        }
       : { url: fallback, isExactMatch: false };
   } catch {
     return { url: fallback, isExactMatch: false };

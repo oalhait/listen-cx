@@ -146,7 +146,7 @@ describe("routes", () => {
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     const html = await res.text();
     expect(html).toContain('Open in Apple Music');
-    expect(html).toContain(`href="${RESOLVED.appleUrl}"`);
+    expect(html).toContain(`href="${RESOLVED.appleUrl!.replace("https:", "music:")}"`);
   });
 
   it("partial links remember a provider and redirect to search", async () => {
@@ -164,7 +164,9 @@ describe("routes", () => {
     expect(choice.headers.get("set-cookie")).toContain("pref=apple");
     const choiceHtml = await choice.text();
     expect(choiceHtml).toContain('Search Apple Music');
-    expect(choiceHtml).toContain(`href="${appleSearchUrl(partial.title, partial.artist)}"`);
+    expect(choiceHtml).toContain(
+      `href="${appleSearchUrl(partial.title, partial.artist).replace("https:", "music:")}"`,
+    );
     expect(choiceHtml).toContain('Opens Apple Music search results');
 
     const returning = await partialApp.request(`/${partialSlug}`, {
@@ -173,7 +175,9 @@ describe("routes", () => {
     expect(returning.status).toBe(200);
     const returningHtml = await returning.text();
     expect(returningHtml).toContain('Search Apple Music');
-    expect(returningHtml).toContain(`href="${appleSearchUrl(partial.title, partial.artist)}"`);
+    expect(returningHtml).toContain(
+      `href="${appleSearchUrl(partial.title, partial.artist).replace("https:", "music:")}"`,
+    );
   });
 
   it("falls back to provider search when a stored destination is unsafe", async () => {
@@ -189,7 +193,9 @@ describe("routes", () => {
     const res = await unsafeApp.request(`/${unsafeSlug}`, { headers: { cookie: "pref=apple" } });
     const html = await res.text();
     expect(html).toContain('Search Apple Music');
-    expect(html).toContain(`href="${appleSearchUrl(unsafe.title, unsafe.artist)}"`);
+    expect(html).toContain(
+      `href="${appleSearchUrl(unsafe.title, unsafe.artist).replace("https:", "music:")}"`,
+    );
     expect(html).not.toContain('javascript:alert');
   });
 
@@ -207,7 +213,9 @@ describe("routes", () => {
     const res = await itunesApp.request(`/${itunesSlug}`, { headers: { cookie: "pref=apple" } });
     const html = await res.text();
     expect(html).toContain("Open in Apple Music");
-    expect(html).toContain(`href="${itunesUrl}"`);
+    expect(html).toContain(
+      `href="music://music.apple.com/us/album/kingston/123456789?i=123456790"`,
+    );
   });
 
   it("?choose=1 overrides the cookie and shows the page", async () => {
