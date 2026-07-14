@@ -140,6 +140,7 @@ describe("routes", () => {
     const res = await app.request(`/${slug}`, { headers: { cookie: "pref=apple" } });
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe(RESOLVED.appleUrl);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
   });
 
   it("partial links remember a provider and redirect to search", async () => {
@@ -210,6 +211,15 @@ describe("routes", () => {
       method: "POST",
       headers: { "Content-Type": "application/json", "Content-Length": "4097" },
       body: JSON.stringify({ url: "https://open.spotify.com/track/x" }),
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it("rejects oversized bodies when Content-Length is forged", async () => {
+    const res = await app.request("/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": "1" },
+      body: JSON.stringify({ url: "https://open.spotify.com/track/" + "x".repeat(4096) }),
     });
     expect(res.status).toBe(413);
   });

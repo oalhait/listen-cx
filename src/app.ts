@@ -7,6 +7,7 @@ import { appleSearchUrl, spotifySearchUrl } from "./urls.js";
 
 const PREF_COOKIE = "pref";
 const ONE_YEAR = 60 * 60 * 24 * 365;
+const MAX_CREATE_BODY_BYTES = 4096;
 const BOT_UA =
   /bot|crawler|spider|facebookexternalhit|twitterbot|slackbot|discordbot|whatsapp|telegram|linkedinbot|applebot|imessage|preview/i;
 
@@ -47,13 +48,37 @@ export function createApp({ resolver, store, baseUrl }: AppDeps) {
 
   app.post("/create", async (c) => {
     const contentLength = Number(c.req.header("content-length") ?? 0);
-    if (contentLength > 4096) {
+    if (contentLength > MAX_CREATE_BODY_BYTES) {
       return c.json({ error: "Request body is too large." }, 413);
     }
 
     let body: { url?: string };
     try {
-      body = await c.req.json();
+      const reader = c.req.raw.body?.getReader();
+      if (!reader) return c.json({ error: "Send JSON with a url field." }, 400);
+
+      const chunks: Uint8Array[] = [];
+      let bodySize = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bodySize += value.byteLength;
+        if (bodySize > MAX_CREATE_BODY_BYTES) {
+          try {
+            await reader.cancel();
+          } catch {}
+          return c.json({ error: "Request body is too large." }, 413);
+        }
+        chunks.push(value);
+      }
+
+      const rawBody = new Uint8Array(bodySize);
+      let offset = 0;
+      for (const chunk of chunks) {
+        rawBody.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      body = JSON.parse(new TextDecoder().decode(rawBody));
     } catch {
       return c.json({ error: "Send JSON with a url field." }, 400);
     }
@@ -100,6 +125,7 @@ export function createApp({ resolver, store, baseUrl }: AppDeps) {
     if (!slug) return c.text("Link not found.", 404);
     const row = await store.get(slug);
     if (!row) return c.text("Link not found.", 404);
+    c.header("Cache-Control", "private, no-store");
 
     const ua = c.req.header("user-agent") ?? "";
     if (BOT_UA.test(ua)) {
