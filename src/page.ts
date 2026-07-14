@@ -193,3 +193,26 @@ copyButton.addEventListener("click",async()=>{
 document.getElementById("again").addEventListener("click",reset);
 </script></body></html>`;
 }
+
+export function sharePage(row: LinkRow, baseUrl: string): string {
+  const link = `${baseUrl}/${row.slug}`;
+  const displayLink = link.replace(/^https?:\/\//, "");
+  return `<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Your link is ready — listen.cx</title><style>${CREATOR_STYLES}</style></head><body>
+<div class="shell"><header>listen.cx</header><main class="main"><section class="panel">
+  <p class="eyebrow">Ready to send</p><h1>Your link is ready</h1>
+  <div class="song">${row.artwork_url ? `<img src="${esc(row.artwork_url)}" alt="">` : `<div class="art-placeholder"></div>`}<div class="song-copy"><div class="song-title">${esc(row.title)}</div><div class="song-artist">${esc(row.artist)}</div></div></div>
+  <div class="link-field"><span class="share-link" id="share-link" data-link="${esc(link)}">${esc(displayLink)}</span><button class="copy" id="copy" type="button">Copy</button></div>
+  <div class="actions"><a class="secondary" href="${esc(`${link}?choose=1`)}" style="display:flex;align-items:center;justify-content:center;text-decoration:none">Preview their link</a><a class="text-button" href="/" style="display:flex;align-items:center;justify-content:center;text-decoration:none">Share another song</a></div>
+</section></main>${waveform()}</div>
+<script>
+const link=document.getElementById("share-link").dataset.link??"";
+const copyButton=document.getElementById("copy");
+copyButton.addEventListener("click",async()=>{
+  const copied=navigator.clipboard?await navigator.clipboard.writeText(link).then(()=>true,()=>false):false;
+  copyButton.textContent=copied?"Copied":"Select link";
+  if(!copied){const selection=getSelection();const range=document.createRange();range.selectNodeContents(document.getElementById("share-link"));selection.removeAllRanges();selection.addRange(range);}
+});
+</script></body></html>`;
+}

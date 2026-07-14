@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import type { Resolver } from "./resolve.js";
 import type { LinkRow, LinkStore } from "./db.js";
-import { choicePage, homePage } from "./page.js";
+import { choicePage, homePage, sharePage } from "./page.js";
 import { appleSearchUrl, spotifySearchUrl } from "./urls.js";
 
 const PREF_COOKIE = "pref";
@@ -93,7 +93,7 @@ export function createApp({ resolver, store, baseUrl }: AppDeps) {
         return c.text("Couldn't reach the music services. Try again.", 502);
       }
       if (!row) return c.text("That doesn't look like a Spotify or Apple Music track link.", 422);
-      return c.redirect(`${baseUrl}/${row.slug}`, 302);
+      return c.html(sharePage(row, baseUrl));
     }
 
     const slug = requestUrl.pathname.match(/^\/([^/]+)$/)?.[1];
