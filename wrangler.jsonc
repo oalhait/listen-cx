@@ -1,0 +1,56 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "listen-cx",
+  "main": "src/worker.ts",
+  "account_id": "a353a278b3ec25248a6b5426d7fd1775",
+  "compatibility_date": "2026-07-13",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": true,
+  "routes": [
+    {
+      "pattern": "listen.cx/*",
+      "zone_name": "listen.cx"
+    }
+  ],
+  "vars": {
+    "BASE_URL": "https://listen.cx"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "listen-cx-production",
+      "database_id": "641a57b8-aa04-445f-af5b-8f25bfc0c892",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01
+    }
+  },
+  "env": {
+    "staging": {
+      "name": "listen-cx-staging",
+      "routes": [],
+      "vars": {
+        "BASE_URL": ""
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "listen-cx-staging",
+          "database_id": "5c6403f5-eaa3-4dc2-befe-9b0bd8da4b9e",
+          "migrations_dir": "migrations"
+        }
+      ]
+    }
+  }
+}

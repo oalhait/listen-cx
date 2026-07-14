@@ -1,0 +1,32 @@
+{
+  "name": "listen-cx",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --env staging",
+    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:production": "wrangler deploy --env=\"\"",
+    "migrate:local": "wrangler d1 migrations apply DB --env staging --local",
+    "migrate:staging": "wrangler d1 migrations apply DB --env staging --remote",
+    "migrate:production": "wrangler d1 migrations apply DB --remote",
+    "types": "wrangler types",
+    "types:check": "wrangler types --check",
+    "check:startup": "wrangler check startup",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.6.16",
+    "nanoid": "^5.0.9"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.18.4",
+    "@cloudflare/workers-types": "^5.20260713.1",
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3",
+    "vite": "^8.1.4",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.110.0"
+  }
+}

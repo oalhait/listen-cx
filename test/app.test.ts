@@ -1,0 +1,189 @@
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { env } from "cloudflare:workers";
+import { createApp } from "../src/app.js";
+import { D1LinkStore } from "../src/db.js";
+import type { Resolved } from "../src/resolve.js";
+import { appleSearchUrl } from "../src/urls.js";
+
+const RESOLVED: Resolved = {
+  isrc: "USSM11804580",
+  title: "Kingston",
+  artist: "Faye Webster",
+  artworkUrl: "https://img/apple.jpg",
+  spotifyUrl: "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC",
+  appleUrl: "https://music.apple.com/us/album/kingston/1443108737?i=1443109064",
+  complete: true,
+};
+
+interface CreateResponse {
+  link: string;
+  slug: string;
+  title?: string;
+  artist?: string;
+  artworkUrl?: string | null;
+}
+
+function createResponse(value: unknown): CreateResponse {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("link" in value) ||
+    typeof value.link !== "string" ||
+    !("slug" in value) ||
+    typeof value.slug !== "string"
+  ) {
+    throw new Error("invalid create response");
+  }
+  return {
+    link: value.link,
+    slug: value.slug,
+    title: "title" in value && typeof value.title === "string" ? value.title : undefined,
+    artist: "artist" in value && typeof value.artist === "string" ? value.artist : undefined,
+    artworkUrl:
+      "artworkUrl" in value && (typeof value.artworkUrl === "string" || value.artworkUrl === null)
+        ? value.artworkUrl
+        : undefined,
+  };
+}
+
+function makeApp(resolved: Resolved | null = RESOLVED) {
+  const store = new D1LinkStore(env.DB);
+  const resolver = { resolve: async () => resolved } as any;
+  const app = createApp({ resolver, store, baseUrl: "https://x.link" });
+  return { app, store };
+}
+
+function makeFailingApp() {
+  const store = new D1LinkStore(env.DB);
+  const resolver = { resolve: async () => Promise.reject(new Error("provider unavailable")) } as any;
+  return createApp({ resolver, store, baseUrl: "https://x.link" });
+}
+
+describe("routes", () => {
+  let app: ReturnType<typeof makeApp>["app"];
+  let slug: string;
+
+  beforeEach(async () => {
+    await env.DB.prepare("DELETE FROM links").run();
+    ({ app } = makeApp());
+    const res = await app.request("/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://open.spotify.com/track/x" }),
+    });
+    ({ slug } = createResponse(await res.json()));
+  });
+
+  it("create returns the short link and dedupes on ISRC", async () => {
+    const res = await app.request("/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://open.spotify.com/track/x" }),
+    });
+    const data = createResponse(await res.json());
+    expect(data.slug).toBe(slug);
+    expect(data.link).toBe(`https://x.link/${slug}`);
+    expect(data.title).toBe(RESOLVED.title);
+    expect(data.artist).toBe(RESOLVED.artist);
+    expect(data.artworkUrl).toBe(RESOLVED.artworkUrl);
+  });
+
+  it("first visit without cookie renders the choice page", async () => {
+    const res = await app.request(`/${slug}`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("Where do you listen?");
+    expect(html).toContain("Kingston");
+  });
+
+  it("?to=spotify sets the cookie and redirects to the track", async () => {
+    const res = await app.request(`/${slug}?to=spotify`);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe(RESOLVED.spotifyUrl);
+    expect(res.headers.get("set-cookie")).toContain("pref=spotify");
+    expect(res.headers.get("set-cookie")).toContain("Secure");
+  });
+
+  it("returning visit with cookie is a bare 302", async () => {
+    const res = await app.request(`/${slug}`, { headers: { cookie: "pref=apple" } });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe(RESOLVED.appleUrl);
+  });
+
+  it("partial links remember a provider and redirect to search", async () => {
+    const partial = { ...RESOLVED, appleUrl: null, complete: false };
+    const { app: partialApp } = makeApp(partial);
+    const created = await partialApp.request("/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: partial.spotifyUrl }),
+    });
+    const { slug: partialSlug } = createResponse(await created.json());
+
+    const choice = await partialApp.request(`/${partialSlug}?to=apple`);
+    expect(choice.status).toBe(302);
+    expect(choice.headers.get("location")).toBe(appleSearchUrl(partial.title, partial.artist));
+    expect(choice.headers.get("set-cookie")).toContain("pref=apple");
+
+    const returning = await partialApp.request(`/${partialSlug}`, {
+      headers: { cookie: "pref=apple" },
+    });
+    expect(returning.status).toBe(302);
+    expect(returning.headers.get("location")).toBe(appleSearchUrl(partial.title, partial.artist));
+  });
+
+  it("?choose=1 overrides the cookie and shows the page", async () => {
+    const res = await app.request(`/${slug}?choose=1`, { headers: { cookie: "pref=apple" } });
+    expect(res.status).toBe(200);
+  });
+
+  it("unfurl bots get OG tags even with no cookie", async () => {
+    const res = await app.request(`/${slug}`, {
+      headers: { "user-agent": "Slackbot-LinkExpanding 1.0" },
+    });
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('og:title" content="Kingston"');
+    expect(html).toContain("og:image");
+  });
+
+  it("rejects non-track urls with a friendly 422", async () => {
+    const { app: rejecting } = makeApp(null);
+    const res = await rejecting.request("/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com" }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it("distinguishes provider failures from invalid links", async () => {
+    const res = await makeFailingApp().request("/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC" }),
+    });
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "Couldn't reach the music services. Try again." });
+  });
+
+  it("reports healthy when D1 is reachable", async () => {
+    const res = await app.request("/healthz");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "ok" });
+  });
+
+  it("rejects oversized create bodies before resolving", async () => {
+    const res = await app.request("/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": "4097" },
+      body: JSON.stringify({ url: "https://open.spotify.com/track/x" }),
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it("unknown slug 404s", async () => {
+    const res = await app.request("/zzzzzzz");
+    expect(res.status).toBe(404);
+  });
+});
