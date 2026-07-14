@@ -88,6 +88,32 @@ describe("routes", () => {
     expect(data.artworkUrl).toBe(RESOLVED.artworkUrl);
   });
 
+  it("converts a pasted Spotify URL from the path into a short link", async () => {
+    const resolve = vi.fn(async () => RESOLVED);
+    const store = new D1LinkStore(env.DB);
+    const converter = createApp({ resolver: { resolve } as any, store, baseUrl: "https://x.link" });
+    const sourceUrl = "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC";
+
+    const res = await converter.request(`/${sourceUrl}`);
+
+    expect(resolve).toHaveBeenCalledWith(sourceUrl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe(`https://x.link/${slug}`);
+  });
+
+  it("preserves Apple deep-link query parameters when converting a path URL", async () => {
+    const resolve = vi.fn(async () => RESOLVED);
+    const store = new D1LinkStore(env.DB);
+    const converter = createApp({ resolver: { resolve } as any, store, baseUrl: "https://x.link" });
+    const sourceUrl = "https://music.apple.com/us/album/kingston/1443108737?i=1443109064";
+
+    const res = await converter.request(`/${sourceUrl}`);
+
+    expect(resolve).toHaveBeenCalledWith(sourceUrl);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe(`https://x.link/${slug}`);
+  });
+
   it("first visit without cookie renders the choice page", async () => {
     const res = await app.request(`/${slug}`);
     expect(res.status).toBe(200);

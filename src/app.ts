@@ -27,6 +27,11 @@ export function createApp({ resolver, store, baseUrl }: AppDeps) {
   const app = new Hono();
   const secureCookies = baseUrl.startsWith("https://");
 
+  async function resolveAndStore(url: string) {
+    const resolved = await resolver.resolve(url);
+    return resolved ? store.upsert(resolved) : null;
+  }
+
   app.get("/", (c) => c.html(homePage(baseUrl)));
 
   app.get("/healthz", async (c) => {
@@ -56,7 +61,7 @@ export function createApp({ resolver, store, baseUrl }: AppDeps) {
 
     let resolved;
     try {
-      resolved = await resolver.resolve(body.url);
+      resolved = await resolveAndStore(body.url);
     } catch (e) {
       console.error(JSON.stringify({ message: "resolve failed", error: String(e) }));
       return c.json({ error: "Couldn't reach the music services. Try again." }, 502);
@@ -64,7 +69,7 @@ export function createApp({ resolver, store, baseUrl }: AppDeps) {
     if (!resolved) {
       return c.json({ error: "That doesn't look like a Spotify or Apple Music track link." }, 422);
     }
-    const row = await store.upsert(resolved);
+    const row = resolved;
     return c.json({
       link: `${baseUrl}/${row.slug}`,
       slug: row.slug,
@@ -75,8 +80,25 @@ export function createApp({ resolver, store, baseUrl }: AppDeps) {
     });
   });
 
-  app.get("/:slug", async (c) => {
-    const row = await store.get(c.req.param("slug"));
+  app.get("/*", async (c) => {
+    const requestUrl = new URL(c.req.url);
+    const pathUrl = `${requestUrl.pathname.slice(1)}${requestUrl.search}`;
+
+    if (/^https?:\/\//.test(pathUrl)) {
+      let row;
+      try {
+        row = await resolveAndStore(pathUrl);
+      } catch (e) {
+        console.error(JSON.stringify({ message: "path resolve failed", error: String(e) }));
+        return c.text("Couldn't reach the music services. Try again.", 502);
+      }
+      if (!row) return c.text("That doesn't look like a Spotify or Apple Music track link.", 422);
+      return c.redirect(`${baseUrl}/${row.slug}`, 302);
+    }
+
+    const slug = requestUrl.pathname.match(/^\/([^/]+)$/)?.[1];
+    if (!slug) return c.text("Link not found.", 404);
+    const row = await store.get(slug);
     if (!row) return c.text("Link not found.", 404);
 
     const ua = c.req.header("user-agent") ?? "";
