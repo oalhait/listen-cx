@@ -78,6 +78,28 @@ ${row.artwork_url ? `<img class="art" src="${esc(row.artwork_url)}" alt="">` : `
 </main></body></html>`;
 }
 
+export function handoffPage(
+  row: LinkRow,
+  provider: "spotify" | "apple",
+  target: string,
+  isExactMatch: boolean,
+): string {
+  const providerName = provider === "spotify" ? "Spotify" : "Apple Music";
+  const action = isExactMatch ? `Open in ${providerName}` : `Search ${providerName}`;
+  const footnote = isExactMatch
+    ? "Opens the song in your music app when it’s installed."
+    : `Opens ${providerName} search results in the app when it’s installed.`;
+  const icon = provider === "spotify" ? SPOTIFY_ICON : APPLE_ICON;
+  return `<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(row.title)} — ${esc(row.artist)}</title><style>${RECEIVER_STYLES}</style></head><body><main class="receiver">
+${row.artwork_url ? `<img class="art" src="${esc(row.artwork_url)}" alt="">` : `<div class="art"></div>`}
+<h1>${esc(row.title)}</h1><p class="artist">${esc(row.artist)}</p>
+<p class="question">Ready to listen?</p><a class="provider" href="${esc(target)}">${icon}${esc(action)}</a>
+<p class="foot">${esc(footnote)}</p>
+</main></body></html>`;
+}
+
 const CREATOR_STYLES = `
   @import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800&family=DM+Mono:wght@500&family=DM+Sans:wght@400;500;600;700&display=swap');
   :root { color-scheme:dark; --orange:#ff7a00; --orange-dark:#e56d00; --espresso:#2b1706; --sunken:#3e2109; --cream:#fff3e8; --muted:#e0bc97; --focus:#ff9840; }

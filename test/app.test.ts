@@ -128,19 +128,25 @@ describe("routes", () => {
     expect(html).toContain("Kingston");
   });
 
-  it("?to=spotify sets the cookie and redirects to the track", async () => {
+  it("?to=spotify sets the cookie and shows a direct provider handoff", async () => {
     const res = await app.request(`/${slug}?to=spotify`);
-    expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe(RESOLVED.spotifyUrl);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
     expect(res.headers.get("set-cookie")).toContain("pref=spotify");
     expect(res.headers.get("set-cookie")).toContain("Secure");
+    const html = await res.text();
+    expect(html).toContain('Open in Spotify');
+    expect(html).toContain(`href="${RESOLVED.spotifyUrl}"`);
   });
 
-  it("returning visit with cookie is a bare 302", async () => {
+  it("returning visit with cookie shows a direct provider handoff", async () => {
     const res = await app.request(`/${slug}`, { headers: { cookie: "pref=apple" } });
-    expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe(RESOLVED.appleUrl);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
     expect(res.headers.get("cache-control")).toBe("private, no-store");
+    const html = await res.text();
+    expect(html).toContain('Open in Apple Music');
+    expect(html).toContain(`href="${RESOLVED.appleUrl}"`);
   });
 
   it("partial links remember a provider and redirect to search", async () => {
@@ -154,15 +160,54 @@ describe("routes", () => {
     const { slug: partialSlug } = createResponse(await created.json());
 
     const choice = await partialApp.request(`/${partialSlug}?to=apple`);
-    expect(choice.status).toBe(302);
-    expect(choice.headers.get("location")).toBe(appleSearchUrl(partial.title, partial.artist));
+    expect(choice.status).toBe(200);
     expect(choice.headers.get("set-cookie")).toContain("pref=apple");
+    const choiceHtml = await choice.text();
+    expect(choiceHtml).toContain('Search Apple Music');
+    expect(choiceHtml).toContain(`href="${appleSearchUrl(partial.title, partial.artist)}"`);
+    expect(choiceHtml).toContain('Opens Apple Music search results');
 
     const returning = await partialApp.request(`/${partialSlug}`, {
       headers: { cookie: "pref=apple" },
     });
-    expect(returning.status).toBe(302);
-    expect(returning.headers.get("location")).toBe(appleSearchUrl(partial.title, partial.artist));
+    expect(returning.status).toBe(200);
+    const returningHtml = await returning.text();
+    expect(returningHtml).toContain('Search Apple Music');
+    expect(returningHtml).toContain(`href="${appleSearchUrl(partial.title, partial.artist)}"`);
+  });
+
+  it("falls back to provider search when a stored destination is unsafe", async () => {
+    const unsafe = { ...RESOLVED, isrc: null, appleUrl: "javascript:alert(1)" };
+    const { app: unsafeApp } = makeApp(unsafe);
+    const created = await unsafeApp.request("/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: unsafe.spotifyUrl }),
+    });
+    const { slug: unsafeSlug } = createResponse(await created.json());
+
+    const res = await unsafeApp.request(`/${unsafeSlug}`, { headers: { cookie: "pref=apple" } });
+    const html = await res.text();
+    expect(html).toContain('Search Apple Music');
+    expect(html).toContain(`href="${appleSearchUrl(unsafe.title, unsafe.artist)}"`);
+    expect(html).not.toContain('javascript:alert');
+  });
+
+  it("uses supported iTunes Apple track URLs as exact destinations", async () => {
+    const itunesUrl = "https://itunes.apple.com/us/album/kingston/123456789?i=123456790";
+    const resolved = { ...RESOLVED, isrc: null, appleUrl: itunesUrl };
+    const { app: itunesApp } = makeApp(resolved);
+    const created = await itunesApp.request("/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: resolved.spotifyUrl }),
+    });
+    const { slug: itunesSlug } = createResponse(await created.json());
+
+    const res = await itunesApp.request(`/${itunesSlug}`, { headers: { cookie: "pref=apple" } });
+    const html = await res.text();
+    expect(html).toContain("Open in Apple Music");
+    expect(html).toContain(`href="${itunesUrl}"`);
   });
 
   it("?choose=1 overrides the cookie and shows the page", async () => {

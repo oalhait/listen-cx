@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import type { Resolver } from "./resolve.js";
 import type { LinkRow, LinkStore } from "./db.js";
-import { choicePage, homePage, sharePage } from "./page.js";
+import { choicePage, handoffPage, homePage, sharePage } from "./page.js";
 import { appleSearchUrl, spotifySearchUrl } from "./urls.js";
 
 const PREF_COOKIE = "pref";
@@ -11,11 +11,31 @@ const MAX_CREATE_BODY_BYTES = 4096;
 const BOT_UA =
   /bot|crawler|spider|facebookexternalhit|twitterbot|slackbot|discordbot|whatsapp|telegram|linkedinbot|applebot|imessage|preview/i;
 
-function providerTarget(row: LinkRow, provider: "spotify" | "apple"): string {
-  if (provider === "spotify") {
-    return row.spotify_url ?? spotifySearchUrl(row.title, row.artist);
+function providerTarget(
+  row: LinkRow,
+  provider: "spotify" | "apple",
+): { url: string; isExactMatch: boolean } {
+  const fallback =
+    provider === "spotify"
+      ? spotifySearchUrl(row.title, row.artist)
+      : appleSearchUrl(row.title, row.artist);
+  const candidate = provider === "spotify" ? row.spotify_url : row.apple_url;
+  if (!candidate) return { url: fallback, isExactMatch: false };
+
+  try {
+    const url = new URL(candidate);
+    const validHost =
+      provider === "spotify"
+        ? url.hostname === "open.spotify.com"
+        : url.hostname === "music.apple.com" ||
+          url.hostname === "geo.music.apple.com" ||
+          url.hostname === "itunes.apple.com";
+    return url.protocol === "https:" && validHost
+      ? { url: url.toString(), isExactMatch: true }
+      : { url: fallback, isExactMatch: false };
+  } catch {
+    return { url: fallback, isExactMatch: false };
   }
-  return row.apple_url ?? appleSearchUrl(row.title, row.artist);
 }
 
 export interface AppDeps {
@@ -142,13 +162,15 @@ export function createApp({ resolver, store, baseUrl }: AppDeps) {
         httpOnly: true,
         secure: secureCookies,
       });
-      return c.redirect(providerTarget(row, to), 302);
+      const target = providerTarget(row, to);
+      return c.html(handoffPage(row, to, target.url, target.isExactMatch));
     }
 
     if (c.req.query("choose") !== "1") {
       const pref = getCookie(c, PREF_COOKIE);
       if (pref === "spotify" || pref === "apple") {
-        return c.redirect(providerTarget(row, pref), 302);
+        const target = providerTarget(row, pref);
+        return c.html(handoffPage(row, pref, target.url, target.isExactMatch));
       }
     }
 

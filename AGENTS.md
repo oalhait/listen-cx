@@ -3,16 +3,18 @@
 Cross-provider song link converter. A sender pastes a Spotify or Apple Music
 track link and gets a short link; a receiver clicks it and the song opens in
 *their* provider. The receiver chooses a provider exactly once, ever (cookie,
-1 year); every later click is a bare 302. The product is `listen.cx`.
+1 year); every later click presents a direct provider handoff. The product is
+`listen.cx`.
 
 ## Product decisions (settled — don't relitigate without asking Omar)
 
 - Receiver-side is the thesis. No sender accounts, no landing-page branding,
   no "add to library" (requires Apple Music user auth — rejected as not
   low-touch). Open the song; that's it.
-- One click ever: choice page buttons link to `?to=spotify|apple`, which sets
-  the pref cookie AND redirects to this song in one gesture. First click is
-  never wasted on configuration.
+- Native provider handoff takes priority over a bare redirect. Choice and
+  returning-receiver flows render a minimal direct provider link so iOS and
+  macOS can treat the provider URL as a user action. The preference still
+  persists for one year.
 - Preference is per-browser (cookie), not per-person. Accepted for v0.
 - Both directions create a usable link. Cross-provider matches are best-effort;
   the highest-scoring catalog result is used even when imperfect. Tracks only;
@@ -21,7 +23,8 @@ track link and gets a short link; a receiver clicks it and the song opens in
   artist, muted "Where do you listen?", two NEUTRAL monochrome buttons
   (no brand colors — deliberate), randomized button order (no default
   provider), footnote "Remembers your choice. Next time, songs open
-  instantly." Returning users never see any page. No product branding on
+  instantly." A returning user sees a minimal direct-provider handoff before
+  the native app opens. No product branding on
   the card. In-app webviews (Instagram etc.) won't share Safari cookies —
   accepted; degrades to one extra tap.
 - Escape hatch: `?choose=1` bypasses the cookie.
