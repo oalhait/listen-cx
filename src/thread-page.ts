@@ -66,7 +66,7 @@ const STYLES = `
   button,input,a { font:inherit; }
   button,a { -webkit-tap-highlight-color:transparent; }
   button:focus-visible,a:focus-visible,input:focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
-  .shell { width:min(100%,720px); margin:0 auto; padding:22px 18px 56px; }
+  .shell { width:100%; max-width:720px; margin:0 auto; padding:22px 18px 56px; }
   .brand { color:var(--espresso); font-size:18px; font-weight:800; letter-spacing:-.02em; text-decoration:none; }
   .topbar { display:flex; min-height:48px; align-items:center; justify-content:space-between; gap:12px; margin-bottom:34px; }
   main { display:grid; gap:24px; }
@@ -111,7 +111,7 @@ const STYLES = `
   .warning { color:var(--danger); font-size:13px; line-height:1.45; }
   [hidden] { display:none!important; }
   @media (max-width:520px) { .shell{padding-inline:16px}.topbar{margin-bottom:24px}.actions>.button,.actions>.button-link{width:100%}.song{grid-template-columns:28px 52px minmax(0,1fr)}.art{width:52px;height:52px} }
-  @media (prefers-color-scheme:dark) { body{background:#1d1007;color:var(--cream)}.brand,h1,h2,label,.song-title{color:var(--cream)}.lede,.status,.song-artist,.notice{color:#d1ad8d}.panel,.song{border-color:#614326}.state,.notice,.secondary,.link-output,input{border-color:#614326;background:var(--espresso);color:var(--cream)}.private{background:#3b210c;color:#ffd0a6}.danger{border-color:#7e3831;background:#331311;color:#ffaaa3} }
+  @media (prefers-color-scheme:dark) { body{background:#1d1007;color:var(--cream)}.brand,h1,h2,label,.song-title{color:var(--cream)}.lede,.status,.song-artist,.notice,.plain{color:#d1ad8d}.panel,.song{border-color:#614326}.state,.notice,.secondary,.link-output,input{border-color:#614326;background:var(--espresso);color:var(--cream)}.state[data-state="open"]{border-color:#9fbd82;color:#d1e7bd}.state[data-state="closed"]{border-color:#c88984;color:#ffbbb5}.private{background:#3b210c;color:#ffd0a6}.danger{border-color:#7e3831;background:#331311;color:#ffaaa3} }
   @media (prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; transition-duration:.01ms!important; animation-duration:.01ms!important; animation-iteration-count:1!important; } }
 `;
 

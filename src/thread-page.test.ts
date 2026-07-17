@@ -49,6 +49,7 @@ describe("threadCreationPage", () => {
     expect(html).toContain('aria-live="polite"');
     expect(html).toContain("data.managementUrl");
     expect(html).toContain('copied?"success":"error"');
+    expect(html).toContain(".shell { width:100%; max-width:720px;");
     expect(html).not.toContain("#manage=");
   });
 
@@ -79,6 +80,8 @@ describe("threadPage", () => {
     expect(html).toContain('data-copy-song="https://listen.cx/song123"');
     expect(html).toContain("data-open-song");
     expect(html).toContain('fetch("/api/thread-events"');
+    expect(html).toContain(".song-artist,.notice,.plain{color:#d1ad8d}");
+    expect(html).toContain('.state[data-state="open"]{border-color:#9fbd82;color:#d1e7bd}');
     expect(html).toContain('data-public-url="https://listen.cx/t/threadabc"');
     expect(html.indexOf("Kingston")).toBeLessThan(html.indexOf("Open in my provider"));
     expect(html).not.toContain("Remove Kingston");
