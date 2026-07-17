@@ -9,8 +9,10 @@ import {
   isThreadCapability,
   normalizeRequestKey,
   normalizeThreadTitle,
+  type ThreadEvent,
+  type ThreadEventSink,
 } from "./thread.js";
-import type { D1ThreadStore, ThreadPageView } from "./thread-db.js";
+import type { ThreadPageView, ThreadStore } from "./thread-db.js";
 import { threadCreationPage, threadPage, type ThreadPageModel } from "./thread-page.js";
 import {
   authorizeManagementCapability,
@@ -18,6 +20,7 @@ import {
   coarseNetworkKey,
   getManagementCookie,
   isAllowedManagementRequest,
+  isAllowedPublicMutation,
   setManagementCookie,
   threadSecurityHeaders,
   type AttemptLimiter,
@@ -73,11 +76,13 @@ function providerTarget(
 export interface AppDeps {
   resolver: Pick<Resolver, "resolve">;
   store: LinkStore;
-  threadStore: D1ThreadStore;
+  threadStore: ThreadStore;
   threadLimiters: {
     creation: AttemptLimiter;
     contribution: AttemptLimiter;
   };
+  threadEvents?: ThreadEventSink;
+  threadsEnabled?: boolean;
   baseUrl: string;
 }
 
@@ -131,10 +136,20 @@ export function createApp({
   store,
   threadStore,
   threadLimiters,
+  threadEvents,
+  threadsEnabled = true,
   baseUrl,
 }: AppDeps) {
   const app = new Hono();
   const secureCookies = baseUrl.startsWith("https://");
+
+  function emitThreadEvent(event: ThreadEvent) {
+    try {
+      threadEvents?.emit(event);
+    } catch (error) {
+      console.error(JSON.stringify({ message: "Thread telemetry failed", error: String(error) }));
+    }
+  }
 
   function applyThreadHeaders(context: { header(name: string, value: string): void }) {
     for (const [name, value] of Object.entries(threadSecurityHeaders())) {
@@ -188,9 +203,11 @@ export function createApp({
     }));
     const state = view.thread.closedAt
       ? "closed"
-      : view.contributions.length >= THREAD_ACTIVE_CONTRIBUTION_LIMIT
-        ? "full"
-        : "open";
+      : view.totalContributions >= view.contributionLimit
+        ? "exhausted"
+        : view.contributions.length >= THREAD_ACTIVE_CONTRIBUTION_LIMIT
+          ? "full"
+          : "open";
     return {
       title: view.thread.title,
       publicUrl: `${baseUrl}/t/${view.thread.publicCapability}`,
@@ -214,7 +231,11 @@ export function createApp({
 
   app.get("/healthz", async (c) => {
     try {
-      return (await store.isReady())
+      const [linksReady, threadsReady] = await Promise.all([
+        store.isReady(),
+        threadsEnabled ? threadStore.isReady() : Promise.resolve(true),
+      ]);
+      return linksReady && threadsReady
         ? c.json({ status: "ok" })
         : c.json({ status: "unavailable" }, 503);
     } catch (error) {
@@ -260,12 +281,17 @@ export function createApp({
   });
 
   app.get("/threads/new", (c) => {
+    if (!threadsEnabled) return c.text("Link not found.", 404);
     applyThreadHeaders(c);
     return c.html(threadCreationPage({ createAction: "/api/threads" }));
   });
 
   app.post("/api/threads", async (c) => {
+    if (!threadsEnabled) return c.text("Link not found.", 404);
     applyThreadHeaders(c);
+    if (!isAllowedPublicMutation(c.req.raw, baseUrl, "create-thread")) {
+      return c.json({ code: "forbidden", error: "Thread creation denied." }, 403);
+    }
     const parsedBody = await readBoundedJson(c.req.raw);
     if (!parsedBody.ok) {
       return c.json({ code: "invalid_body", error: parsedBody.error }, parsedBody.status);
@@ -286,10 +312,14 @@ export function createApp({
 
     const networkKey = coarseNetworkKey(c.req.header("cf-connecting-ip"));
     const decision = await threadLimiters.creation.check(networkKey);
-    if (!decision.allowed) return rateLimited(c, decision.retryAfterSeconds);
+    if (!decision.allowed) {
+      emitThreadEvent({ event: "thread_creation", outcome: "rate_limited" });
+      return rateLimited(c, decision.retryAfterSeconds);
+    }
 
     const result = await threadStore.create(title);
     if (result.status === "limit_reached") {
+      emitThreadEvent({ event: "thread_creation", outcome: "limit_reached" });
       return c.json(
         {
           code: "thread_limit_reached",
@@ -305,6 +335,7 @@ export function createApp({
       result.managementCapability,
     );
     const publicUrl = `${baseUrl}/t/${result.thread.publicCapability}`;
+    emitThreadEvent({ event: "thread_creation", outcome: "created" });
     return c.json(
       {
         publicUrl,
@@ -315,6 +346,7 @@ export function createApp({
   });
 
   app.get("/t/:slug", async (c) => {
+    if (!threadsEnabled) return c.text("Link not found.", 404);
     const publicCapability = c.req.param("slug");
     const view = await threadStore.getPageView(publicCapability);
     if (!view) return c.text("Link not found.", 404);
@@ -325,9 +357,31 @@ export function createApp({
     return c.html(threadPage(await threadModel(view, managed)));
   });
 
+  app.get("/api/threads/:slug", async (c) => {
+    if (!threadsEnabled) return c.text("Link not found.", 404);
+    applyThreadHeaders(c);
+    const view = await threadStore.getPageView(c.req.param("slug"));
+    if (!view) return c.json({ code: "not_found", error: "Thread not found." }, 404);
+    const model = await threadModel(view, false);
+    return c.json({
+      title: model.title,
+      state: model.state,
+      songs: model.songs.map((song) => ({
+        title: song.title,
+        artist: song.artist,
+        artworkUrl: song.artworkUrl,
+        url: song.canonicalUrl,
+      })),
+    });
+  });
+
   app.post("/api/threads/:slug/contributions", async (c) => {
+    if (!threadsEnabled) return c.text("Link not found.", 404);
     applyThreadHeaders(c);
     const publicCapability = c.req.param("slug");
+    if (!isAllowedPublicMutation(c.req.raw, baseUrl, "add-song")) {
+      return c.json({ code: "forbidden", error: "Contribution denied." }, 403);
+    }
     const parsedBody = await readBoundedJson(c.req.raw);
     if (!parsedBody.ok) {
       return c.json({ code: "invalid_body", error: parsedBody.error }, parsedBody.status);
@@ -367,9 +421,44 @@ export function createApp({
     const decision = await threadLimiters.contribution.check(
       `${publicCapability}\0add-song`,
     );
-    if (!decision.allowed) return rateLimited(c, decision.retryAfterSeconds);
+    if (!decision.allowed) {
+      emitThreadEvent({ event: "thread_contribution", outcome: "rate_limited" });
+      return rateLimited(c, decision.retryAfterSeconds);
+    }
 
-    if (!(await threadStore.exists(publicCapability))) {
+    const sourceIdentity = {
+      sourceProvider: parsedTrack.provider,
+      sourceCatalogId: parsedTrack.id,
+      sourceStorefront: parsedTrack.storefront,
+    };
+    const inputFingerprint = await fingerprintContributionInput(sourceIdentity);
+    const preflight = await threadStore.preflightContribution(
+      publicCapability,
+      requestKey,
+      inputFingerprint,
+    );
+    if (preflight.status === "existing") {
+      emitThreadEvent({ event: "thread_contribution", outcome: "existing" });
+      return c.json({ status: "existing", contributionId: preflight.contribution.id });
+    }
+    if (preflight.status === "conflict") {
+      emitThreadEvent({ event: "thread_contribution", outcome: "conflict" });
+      return c.json(
+        { code: "conflict", error: "That request key was already used for another song." },
+        409,
+      );
+    }
+    if (preflight.status === "limit_reached") {
+      emitThreadEvent({ event: "thread_contribution", outcome: "limit_reached" });
+      return c.json(
+        {
+          code: "contribution_limit_reached",
+          error: "This Thread has reached its lifetime contribution limit.",
+        },
+        409,
+      );
+    }
+    if (preflight.status === "not_found") {
       return c.json({ code: "not_found", error: "Thread not found." }, 404);
     }
 
@@ -377,6 +466,7 @@ export function createApp({
     try {
       link = await resolveAndStore(parsedBody.value.url);
     } catch {
+      emitThreadEvent({ event: "thread_contribution", outcome: "provider_unavailable" });
       return c.json(
         {
           code: "provider_unavailable",
@@ -394,36 +484,73 @@ export function createApp({
 
     const identity = {
       linkSlug: link.slug,
-      sourceProvider: parsedTrack.provider,
-      sourceCatalogId: parsedTrack.id,
-      sourceStorefront: parsedTrack.storefront,
+      ...sourceIdentity,
     };
     const result = await threadStore.acceptContribution(publicCapability, {
       ...identity,
       requestKey,
-      inputFingerprint: await fingerprintContributionInput(identity),
+      inputFingerprint,
     });
 
     switch (result.status) {
       case "accepted":
+        emitThreadEvent({
+          event: "thread_contribution",
+          outcome: "accepted",
+          count: result.contribution.position,
+        });
         return c.json({ status: "accepted", contributionId: result.contribution.id }, 201);
       case "existing":
+        emitThreadEvent({ event: "thread_contribution", outcome: "existing" });
         return c.json({ status: "existing", contributionId: result.contribution.id });
       case "conflict":
+        emitThreadEvent({ event: "thread_contribution", outcome: "conflict" });
         return c.json(
           { code: "conflict", error: "That request key was already used for another song." },
           409,
         );
       case "full":
+        emitThreadEvent({ event: "thread_contribution", outcome: "full" });
         return c.json({ code: "full", error: "This Thread is full." }, 409);
       case "closed":
+        emitThreadEvent({ event: "thread_contribution", outcome: "closed" });
         return c.json({ code: "closed", error: "Contributions are closed." }, 409);
+      case "limit_reached":
+        emitThreadEvent({ event: "thread_contribution", outcome: "limit_reached" });
+        return c.json(
+          {
+            code: "contribution_limit_reached",
+            error: "This Thread has reached its lifetime contribution limit.",
+          },
+          409,
+        );
       case "not_found":
         return c.json({ code: "not_found", error: "Thread not found." }, 404);
     }
   });
 
+  app.post("/api/thread-events", async (c) => {
+    if (!threadsEnabled) return c.text("Link not found.", 404);
+    applyThreadHeaders(c);
+    if (!isAllowedPublicMutation(c.req.raw, baseUrl, "thread-event")) {
+      return c.json({ code: "forbidden", error: "Event denied." }, 403);
+    }
+    const parsedBody = await readBoundedJson(c.req.raw);
+    if (!parsedBody.ok) {
+      return c.json({ code: "invalid_event", error: parsedBody.error }, parsedBody.status);
+    }
+    if (!isRecord(parsedBody.value) || !["opened", "copied"].includes(String(parsedBody.value.outcome))) {
+      return c.json({ code: "invalid_event", error: "Event is invalid." }, 400);
+    }
+    emitThreadEvent({
+      event: "thread_song_action",
+      outcome: parsedBody.value.outcome as "opened" | "copied",
+    });
+    return c.body(null, 204);
+  });
+
   app.post("/t/:slug/manage/activate", async (c) => {
+    if (!threadsEnabled) return c.text("Link not found.", 404);
     applyThreadHeaders(c);
     const publicCapability = c.req.param("slug");
     if (!isAllowedManagementRequest(c.req.raw, baseUrl)) {
@@ -454,6 +581,7 @@ export function createApp({
   });
 
   app.post("/t/:slug/manage/contributions/:id/remove", async (c) => {
+    if (!threadsEnabled) return c.text("Link not found.", 404);
     applyThreadHeaders(c);
     const publicCapability = c.req.param("slug");
     if (!isAllowedManagementRequest(c.req.raw, baseUrl)) {
@@ -468,12 +596,15 @@ export function createApp({
       return c.json({ code: "not_found", error: "Contribution not found." }, 404);
     }
     const result = await threadStore.removeContribution(authorization, contributionId);
-    return result.status === "removed"
-      ? c.json({ status: "removed" })
-      : c.json({ code: "not_found", error: "Contribution not found." }, 404);
+    if (result.status === "removed") {
+      emitThreadEvent({ event: "thread_management", outcome: "removed" });
+      return c.json({ status: "removed" });
+    }
+    return c.json({ code: "not_found", error: "Contribution not found." }, 404);
   });
 
   app.post("/t/:slug/manage/close", async (c) => {
+    if (!threadsEnabled) return c.text("Link not found.", 404);
     applyThreadHeaders(c);
     const publicCapability = c.req.param("slug");
     if (!isAllowedManagementRequest(c.req.raw, baseUrl)) {
@@ -484,9 +615,11 @@ export function createApp({
       return c.json({ code: "unauthorized", error: "Management authorization required." }, 401);
     }
     const result = await threadStore.close(authorization);
-    return result.status === "closed"
-      ? c.json({ status: "closed" })
-      : c.json({ code: "not_found", error: "Thread not found." }, 404);
+    if (result.status === "closed") {
+      emitThreadEvent({ event: "thread_management", outcome: "closed" });
+      return c.json({ status: "closed" });
+    }
+    return c.json({ code: "not_found", error: "Thread not found." }, 404);
   });
 
   app.get("/*", async (c) => {

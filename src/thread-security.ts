@@ -9,6 +9,7 @@ const MANAGEMENT_AUTHORIZATION = Symbol("ManagementAuthorization");
 
 export const MANAGEMENT_ACTION_HEADER = "x-listen-management-action";
 export const MANAGEMENT_ACTION_VALUE = "1";
+export const PUBLIC_ACTION_HEADER = "x-listen-action";
 
 export interface ManagementDigestReader {
   getManagementDigest(publicCapability: string): Promise<string | null>;
@@ -118,6 +119,27 @@ export function isAllowedManagementRequest(request: Request, baseUrl: string): b
   );
 }
 
+export function isAllowedPublicMutation(
+  request: Request,
+  baseUrl: string,
+  action: "create-thread" | "add-song" | "thread-event",
+): boolean {
+  if (request.method !== "POST") return false;
+
+  let expectedOrigin: string;
+  try {
+    expectedOrigin = new URL(baseUrl).origin;
+  } catch {
+    return false;
+  }
+  const mediaType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  return (
+    request.headers.get("origin") === expectedOrigin &&
+    request.headers.get(PUBLIC_ACTION_HEADER) === action &&
+    mediaType === "application/json"
+  );
+}
+
 export function threadSecurityHeaders(): Record<string, string> {
   return {
     "Cache-Control": "private, no-store",
@@ -172,7 +194,15 @@ export function createCloudflareAttemptLimiter(
   return {
     async check(rawKey) {
       const key = await sha256Hex(`${scope}\0${rawKey}`);
-      const { success } = await binding.limit({ key });
+      let success: boolean;
+      try {
+        ({ success } = await binding.limit({ key }));
+      } catch (error) {
+        console.error(
+          JSON.stringify({ message: "Thread rate limiter unavailable", scope, error: String(error) }),
+        );
+        return { allowed: true, retryAfterSeconds: null };
+      }
       return {
         allowed: success,
         retryAfterSeconds: success ? null : retryAfterSeconds,

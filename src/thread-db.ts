@@ -1,5 +1,6 @@
 import {
   THREAD_ACTIVE_CONTRIBUTION_LIMIT,
+  THREAD_TOTAL_CONTRIBUTION_LIMIT,
   createThreadCapabilities,
   normalizeRequestKey,
   normalizeThreadTitle,
@@ -36,6 +37,7 @@ interface ThreadPageRow {
   title: string;
   closed_at: string | null;
   thread_created_at: string;
+  total_contributions: number;
   contribution_id: number | null;
   link_slug: string | null;
   position: number | null;
@@ -46,6 +48,7 @@ interface ThreadPageRow {
 
 interface ContributionClassificationRow {
   closed_at: string | null;
+  thread_contributions: number;
   contribution_id: number | null;
   thread_id: number | null;
   link_slug: string | null;
@@ -104,6 +107,14 @@ export type AcceptContributionResult =
   | { status: "conflict" }
   | { status: "full" }
   | { status: "closed" }
+  | { status: "limit_reached" }
+  | { status: "not_found" };
+
+export type ContributionPreflightResult =
+  | { status: "continue" }
+  | { status: "existing"; contribution: ThreadContribution }
+  | { status: "conflict" }
+  | { status: "limit_reached" }
   | { status: "not_found" };
 
 export type RemoveContributionResult =
@@ -131,14 +142,39 @@ export interface ThreadPageContribution {
 export interface ThreadPageView {
   thread: ThreadRecord;
   contributions: ThreadPageContribution[];
+  totalContributions: number;
+  contributionLimit: number;
 }
 
 export interface ThreadStoreOptions {
   maxThreads: number;
+  maxContributionsPerThread?: number;
 }
 
-export class D1ThreadStore {
+export interface ThreadStore {
+  isReady(): Promise<boolean>;
+  create(title: string): Promise<CreateThreadResult>;
+  getManagementDigest(publicCapability: string): Promise<string | null>;
+  getPageView(publicCapability: string): Promise<ThreadPageView | null>;
+  preflightContribution(
+    publicCapability: string,
+    requestKey: string,
+    inputFingerprint: string,
+  ): Promise<ContributionPreflightResult>;
+  acceptContribution(
+    publicCapability: string,
+    input: AcceptContributionInput,
+  ): Promise<AcceptContributionResult>;
+  removeContribution(
+    authorization: ManagementAuthorization,
+    contributionId: number,
+  ): Promise<RemoveContributionResult>;
+  close(authorization: ManagementAuthorization): Promise<CloseThreadResult>;
+}
+
+export class D1ThreadStore implements ThreadStore {
   private readonly maxThreads: number;
+  private readonly maxContributionsPerThread: number;
 
   constructor(
     private readonly db: D1Database,
@@ -148,6 +184,19 @@ export class D1ThreadStore {
       throw new Error("maxThreads must be a positive integer");
     }
     this.maxThreads = options.maxThreads;
+    const maxContributionsPerThread =
+      options.maxContributionsPerThread ?? THREAD_TOTAL_CONTRIBUTION_LIMIT;
+    if (!Number.isSafeInteger(maxContributionsPerThread) || maxContributionsPerThread < 1) {
+      throw new Error("maxContributionsPerThread must be a positive integer");
+    }
+    this.maxContributionsPerThread = maxContributionsPerThread;
+  }
+
+  async isReady(): Promise<boolean> {
+    const result = await this.db
+      .prepare("SELECT COUNT(*) AS count FROM threads")
+      .first<{ count: number }>();
+    return typeof result?.count === "number";
   }
 
   async create(title: string): Promise<CreateThreadResult> {
@@ -217,6 +266,8 @@ export class D1ThreadStore {
            t.title,
            t.closed_at,
            t.created_at AS thread_created_at,
+           (SELECT COUNT(*) FROM thread_contributions history WHERE history.thread_id = t.id)
+             AS total_contributions,
            c.id AS contribution_id,
            c.link_slug,
            c.position,
@@ -263,16 +314,54 @@ export class D1ThreadStore {
         createdAt: first.thread_created_at,
       },
       contributions,
+      totalContributions: first.total_contributions,
+      contributionLimit: this.maxContributionsPerThread,
     };
   }
 
-  async exists(publicCapability: string): Promise<boolean> {
-    const row = await this.db
+  async preflightContribution(
+    publicCapability: string,
+    rawRequestKey: string,
+    inputFingerprint: string,
+  ): Promise<ContributionPreflightResult> {
+    const requestKey = normalizeRequestKey(rawRequestKey);
+    const classification = await this.db
       .withSession("first-primary")
-      .prepare("SELECT 1 AS found FROM threads WHERE public_capability = ?")
-      .bind(publicCapability)
-      .first<{ found: number }>();
-    return row?.found === 1;
+      .prepare(
+        `SELECT
+           t.closed_at,
+           (
+             SELECT COUNT(*) FROM thread_contributions history
+             WHERE history.thread_id = t.id
+           ) AS thread_contributions,
+           c.id AS contribution_id,
+           c.thread_id,
+           c.link_slug,
+           c.request_key,
+           c.input_fingerprint,
+           c.source_provider,
+           c.source_catalog_id,
+           c.source_storefront,
+           c.position,
+           c.removed_at,
+           c.created_at AS contribution_created_at
+         FROM threads t
+         LEFT JOIN thread_contributions c
+           ON c.thread_id = t.id AND c.request_key = ?
+         WHERE t.public_capability = ?`,
+      )
+      .bind(requestKey, publicCapability)
+      .first<ContributionClassificationRow>();
+    if (!classification) return { status: "not_found" };
+    if (classification.contribution_id !== null) {
+      const existing = classificationContribution(classification);
+      return existing.input_fingerprint === inputFingerprint
+        ? { status: "existing", contribution: mapContribution(existing) }
+        : { status: "conflict" };
+    }
+    return classification.thread_contributions >= this.maxContributionsPerThread
+      ? { status: "limit_reached" }
+      : { status: "continue" };
   }
 
   async acceptContribution(
@@ -295,6 +384,10 @@ export class D1ThreadStore {
          FROM threads t
          WHERE t.public_capability = ?
            AND t.closed_at IS NULL
+           AND (
+             SELECT COUNT(*) FROM thread_contributions history
+             WHERE history.thread_id = t.id
+           ) < ?
            AND NOT EXISTS (
              SELECT 1 FROM thread_contributions existing
              WHERE existing.thread_id = t.id AND existing.request_key = ?
@@ -313,6 +406,7 @@ export class D1ThreadStore {
         input.sourceCatalogId,
         input.sourceStorefront,
         publicCapability,
+        this.maxContributionsPerThread,
         requestKey,
         THREAD_ACTIVE_CONTRIBUTION_LIMIT,
       )
@@ -326,6 +420,10 @@ export class D1ThreadStore {
       .prepare(
         `SELECT
            t.closed_at,
+           (
+             SELECT COUNT(*) FROM thread_contributions history
+             WHERE history.thread_id = t.id
+           ) AS thread_contributions,
            c.id AS contribution_id,
            c.thread_id,
            c.link_slug,
@@ -355,6 +453,9 @@ export class D1ThreadStore {
     }
 
     if (classification.closed_at !== null) return { status: "closed" };
+    if (classification.thread_contributions >= this.maxContributionsPerThread) {
+      return { status: "limit_reached" };
+    }
     return { status: "full" };
   }
 

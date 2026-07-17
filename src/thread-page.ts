@@ -4,7 +4,7 @@ import {
 } from "./thread-security.js";
 import { esc } from "./page.js";
 
-export type ThreadState = "open" | "full" | "closed";
+export type ThreadState = "open" | "full" | "exhausted" | "closed";
 export type ThreadStatusTone = "info" | "success" | "error";
 
 export interface ThreadStatusView {
@@ -173,6 +173,7 @@ const pageStatus=document.getElementById("page-status");
 const createSubmit=document.getElementById("create-thread-submit");
 let createdPublicUrl="";
 let privateManagementUrl="";
+let createInFlight=false;
 ${COPY_HELPERS}
 function showCreated(data){
   createdPublicUrl=typeof data.publicUrl==="string"?data.publicUrl:"";
@@ -183,16 +184,16 @@ function showCreated(data){
   createView.hidden=true;successView.hidden=false;setStatus("Thread created.","success");document.getElementById("share-created-thread").focus();
 }
 createForm.addEventListener("submit",async(event)=>{
-  event.preventDefault();const title=titleInput.value.trim();
+  event.preventDefault();if(createInFlight)return;const title=titleInput.value.trim();
   if(!title){setStatus("Enter a Thread title.","error");titleInput.focus();return;}
-  createSubmit.disabled=true;createSubmit.textContent="Creating…";setStatus("Creating your Thread…");
+  createInFlight=true;titleInput.disabled=true;createSubmit.disabled=true;createSubmit.textContent="Creating…";setStatus("Creating your Thread…");
   try{
     const response=await fetch(createForm.action,{method:"POST",headers:{"Content-Type":"application/json","X-Listen-Action":"create-thread"},body:JSON.stringify({title})});
     const data=await response.json().catch(()=>({}));
     if(!response.ok){setStatus(typeof data.error==="string"?data.error:"Couldn’t create this Thread. Try again.","error");return;}
     showCreated(data);
   }catch{setStatus("Couldn’t create this Thread. Check your connection and try again.","error");}
-  finally{createSubmit.disabled=false;createSubmit.textContent="Create Thread";}
+  finally{createInFlight=false;titleInput.disabled=false;createSubmit.disabled=false;createSubmit.textContent="Create Thread";}
 });
 document.getElementById("copy-created-thread").addEventListener("click",async()=>{reportCopy(await copyText(createdPublicUrl),"Public Thread link copied.","Select and copy the public link above.");});
 document.getElementById("share-created-thread").addEventListener("click",async()=>{
@@ -213,7 +214,7 @@ function songRow(song: ThreadSongView, managed: boolean): string {
   return `<li class="song" data-contribution-id="${esc(song.contributionId)}">
     ${artwork && artwork !== "#" ? `<img class="art" src="${artwork}" alt="">` : `<div class="art" aria-hidden="true"></div>`}
     <div class="song-main"><div class="song-title">${esc(song.title)}</div><div class="song-artist">${esc(song.artist)}</div></div>
-    <div class="song-actions"><a class="button-link secondary" href="${canonicalUrl}">Open in my provider</a><button class="button plain" type="button" data-copy-song="${canonicalUrl}">Copy song link</button>${remove}</div>
+    <div class="song-actions"><a class="button-link secondary" href="${canonicalUrl}" data-open-song>Open in my provider</a><button class="button plain" type="button" data-copy-song="${canonicalUrl}">Copy song link</button>${remove}</div>
   </li>`;
 }
 
@@ -227,6 +228,9 @@ function addSection(model: ThreadPageModel): string {
       : "This Thread is full. The creator can remove a song to make room.";
     return `<section class="panel"><h2>This Thread is full</h2><p class="notice">${guidance}</p></section>`;
   }
+  if (model.state === "exhausted") {
+    return `<section class="panel"><h2>Contributions are complete</h2><p class="notice">This Thread reached its lifetime contribution limit. Its songs remain openable and shareable.</p></section>`;
+  }
   return `<section class="panel"><h2>${model.songs.length ? "Add a song" : "Add the first song"}</h2>
     <form class="form" id="add-song-form" action="${safeUrl(model.actions.add)}" method="post" novalidate>
       <label for="song-url">Spotify or Apple Music song link</label>
@@ -237,7 +241,7 @@ function addSection(model: ThreadPageModel): string {
 }
 
 export function threadPage(model: ThreadPageModel): string {
-  const stateLabel = model.state === "closed" ? "Closed" : model.state === "full" ? "Full" : "Open";
+  const stateLabel = model.state === "closed" ? "Closed" : model.state === "full" ? "Full" : model.state === "exhausted" ? "Complete" : "Open";
   const description = `${model.songs.length} ${model.songs.length === 1 ? "song" : "songs"} in this listen.cx Thread.`;
   const firstArtwork = model.songs.find((song) => song.artworkUrl)?.artworkUrl;
   const closeAction = model.managed && model.state !== "closed" && model.actions.close ? safeUrl(model.actions.close) : null;
@@ -272,19 +276,21 @@ async function activateManagement(){
   if(response.ok){location.reload();return;}
   setStatus("That private management link is invalid or no longer available.","error");
 }
-for(const button of document.querySelectorAll("[data-copy-song]")){button.addEventListener("click",async()=>{reportCopy(await copyText(button.dataset.copySong||""),"Song link copied.","Couldn’t copy the song link.");});}
+function reportSongAction(outcome){fetch("/api/thread-events",{method:"POST",headers:{"Content-Type":"application/json","X-Listen-Action":"thread-event"},body:JSON.stringify({outcome}),keepalive:true}).catch(()=>{});}
+for(const link of document.querySelectorAll("[data-open-song]")){link.addEventListener("click",()=>{reportSongAction("opened");});}
+for(const button of document.querySelectorAll("[data-copy-song]")){button.addEventListener("click",async()=>{const copied=await copyText(button.dataset.copySong||"");reportCopy(copied,"Song link copied.","Couldn’t copy the song link.");if(copied)reportSongAction("copied");});}
 for(const button of document.querySelectorAll("[data-copy-thread]")){button.addEventListener("click",async()=>{reportCopy(await copyText(button.dataset.publicUrl||""),"Public Thread link copied.","Couldn’t copy the Thread link.");});}
 for(const button of document.querySelectorAll("[data-share-thread]")){button.addEventListener("click",async()=>{const url=button.dataset.publicUrl||"";if(navigator.share){try{await navigator.share({title:document.title,url});return;}catch(error){if(error&&error.name==="AbortError")return;}}reportCopy(await copyText(url),"Public Thread link copied.","Couldn’t share the Thread link.");});}
 const addForm=document.getElementById("add-song-form");
 if(addForm){
-  const input=document.getElementById("song-url");const submit=document.getElementById("add-song-submit");let requestKey="";
+  const input=document.getElementById("song-url");const submit=document.getElementById("add-song-submit");let requestKey="";let addInFlight=false;
   input.addEventListener("input",()=>{requestKey="";});
   addForm.addEventListener("submit",async(event)=>{
-    event.preventDefault();const url=input.value.trim();if(!url){setStatus("Paste a Spotify or Apple Music song link.","error");input.focus();return;}
-    requestKey=requestKey||(crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random());submit.disabled=true;submit.textContent="Adding…";setStatus("Finding that song…");
+    event.preventDefault();if(addInFlight)return;const url=input.value.trim();if(!url){setStatus("Paste a Spotify or Apple Music song link.","error");input.focus();return;}
+    addInFlight=true;requestKey=requestKey||(crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random());input.disabled=true;submit.disabled=true;submit.textContent="Adding…";setStatus("Finding that song…");
     try{const response=await fetch(addForm.action,{method:"POST",headers:{"Content-Type":"application/json","X-Listen-Action":"add-song"},body:JSON.stringify({url,requestKey})});const data=await response.json().catch(()=>({}));if(response.ok){location.reload();return;}setStatus(typeof data.error==="string"?data.error:"Couldn’t add that song. Try again.","error");}
     catch{setStatus("Couldn’t add that song. Check your connection and try again.","error");}
-    finally{submit.disabled=false;submit.textContent="Add song";}
+    finally{addInFlight=false;input.disabled=false;submit.disabled=false;submit.textContent="Add song";}
   });
 }
 for(const button of document.querySelectorAll("[data-remove-action]")){button.addEventListener("click",async()=>{button.disabled=true;try{const response=await fetch(button.dataset.removeAction||"",{method:"POST",headers:managementHeaders});if(response.ok){location.reload();return;}const data=await response.json().catch(()=>({}));setStatus(typeof data.error==="string"?data.error:"Couldn’t remove that song.","error");}catch{setStatus("Couldn’t remove that song. Try again.","error");}finally{button.disabled=false;}});}

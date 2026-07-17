@@ -15,6 +15,7 @@ interface ThreadLimiterBindings {
 }
 
 interface ThreadConfigurationBindings {
+  THREADS_ENABLED: boolean;
   THREAD_MAX_THREADS: number;
 }
 
@@ -32,6 +33,7 @@ let appCache:
       creationLimiter: RateLimit;
       contributionLimiter: RateLimit;
       maximumThreads: number;
+      threadsEnabled: boolean;
       app: WorkerApp;
     }
   | undefined;
@@ -66,7 +68,8 @@ export function getWorkerApp(env: Env, requestUrl: string): WorkerApp {
     appCache.db === env.DB &&
     appCache.creationLimiter === env.THREAD_CREATE_RATE_LIMITER &&
     appCache.contributionLimiter === env.THREAD_CONTRIBUTION_RATE_LIMITER &&
-    appCache.maximumThreads === maximumThreads
+    appCache.maximumThreads === maximumThreads &&
+    appCache.threadsEnabled === env.THREADS_ENABLED
   ) {
     return appCache.app;
   }
@@ -76,6 +79,12 @@ export function getWorkerApp(env: Env, requestUrl: string): WorkerApp {
     store: new D1LinkStore(env.DB),
     threadStore: new D1ThreadStore(env.DB, { maxThreads: maximumThreads }),
     threadLimiters: createThreadLimiters(env),
+    threadEvents: {
+      emit(event) {
+        console.log(JSON.stringify(event));
+      },
+    },
+    threadsEnabled: env.THREADS_ENABLED,
     baseUrl,
   });
   appCache = {
@@ -84,6 +93,7 @@ export function getWorkerApp(env: Env, requestUrl: string): WorkerApp {
     creationLimiter: env.THREAD_CREATE_RATE_LIMITER,
     contributionLimiter: env.THREAD_CONTRIBUTION_RATE_LIMITER,
     maximumThreads,
+    threadsEnabled: env.THREADS_ENABLED,
     app,
   };
   return app;

@@ -9,6 +9,7 @@ import {
   fixedAttemptLimiter,
   getManagementCookie,
   isAllowedManagementRequest,
+  isAllowedPublicMutation,
   setManagementCookie,
   threadSecurityHeaders,
 } from "./thread-security.js";
@@ -144,6 +145,38 @@ describe("management mutation guard", () => {
   });
 });
 
+describe("public Thread mutation guard", () => {
+  it("requires a same-origin JSON POST with the exact public action header", () => {
+    const allowed = new Request("https://listen.cx/api/threads", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json; charset=UTF-8",
+        origin: "https://listen.cx",
+        "x-listen-action": "create-thread",
+      },
+    });
+    const crossSite = new Request("https://listen.cx/api/threads", {
+      method: "POST",
+      headers: {
+        "content-type": "text/plain",
+        origin: "https://evil.example",
+      },
+    });
+    const wrongAction = new Request("https://listen.cx/api/threads", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://listen.cx",
+        "x-listen-action": "add-song",
+      },
+    });
+
+    expect(isAllowedPublicMutation(allowed, "https://listen.cx", "create-thread")).toBe(true);
+    expect(isAllowedPublicMutation(crossSite, "https://listen.cx", "create-thread")).toBe(false);
+    expect(isAllowedPublicMutation(wrongAction, "https://listen.cx", "create-thread")).toBe(false);
+  });
+});
+
 describe("Thread response headers", () => {
   it("prevents caching, referrer leakage, and indexing", () => {
     expect(threadSecurityHeaders()).toEqual({
@@ -208,5 +241,23 @@ describe("Cloudflare attempt limiter", () => {
     expect(creationLimit.mock.calls[0]?.[0]?.key).not.toBe(
       contributionLimit.mock.calls[0]?.[0]?.key,
     );
+  });
+
+  it("fails open to authoritative D1 limits when the binding is unavailable", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const limiter = createCloudflareAttemptLimiter(
+      { limit: vi.fn().mockRejectedValue(new Error("binding unavailable")) },
+      "thread:create",
+      60,
+    );
+
+    await expect(limiter.check("203.0.113.7")).resolves.toEqual({
+      allowed: true,
+      retryAfterSeconds: null,
+    });
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('"message":"Thread rate limiter unavailable"'),
+    );
+    error.mockRestore();
   });
 });

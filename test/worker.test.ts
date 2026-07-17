@@ -42,6 +42,8 @@ describe("worker", () => {
       headers: {
         "content-type": "application/json",
         "cf-connecting-ip": "203.0.113.40",
+        origin: "https://staging.listen.cx",
+        "x-listen-action": "create-thread",
       },
       body: JSON.stringify({ title: "Worker wiring" }),
     });

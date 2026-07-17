@@ -1,6 +1,7 @@
 export const THREAD_TITLE_MAX_LENGTH = 80;
 export const THREAD_REQUEST_KEY_MAX_LENGTH = 128;
 export const THREAD_ACTIVE_CONTRIBUTION_LIMIT = 50;
+export const THREAD_TOTAL_CONTRIBUTION_LIMIT = 500;
 
 const CONTROL_CHARACTER = /\p{Cc}/u;
 const THREAD_CAPABILITY = /^[A-Za-z0-9_-]{22}$/;
@@ -20,6 +21,37 @@ export interface ThreadCapabilities {
   publicCapability: string;
   managementCapability: string;
   managementDigest: string;
+}
+
+export type ThreadEvent =
+  | {
+      event: "thread_creation";
+      outcome: "created" | "rate_limited" | "limit_reached";
+    }
+  | {
+      event: "thread_contribution";
+      outcome:
+        | "accepted"
+        | "existing"
+        | "conflict"
+        | "full"
+        | "closed"
+        | "rate_limited"
+        | "limit_reached"
+        | "provider_unavailable";
+      count?: number;
+    }
+  | {
+      event: "thread_management";
+      outcome: "removed" | "closed";
+    }
+  | {
+      event: "thread_song_action";
+      outcome: "opened" | "copied";
+    };
+
+export interface ThreadEventSink {
+  emit(event: ThreadEvent): void;
 }
 
 export function isThreadCapability(value: string): boolean {

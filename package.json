@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --env staging",
-    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:staging": "wrangler d1 migrations apply DB --env staging --remote && wrangler deploy --env staging",
     "deploy:production": "wrangler deploy --env=\"\"",
     "migrate:local": "wrangler d1 migrations apply DB --env staging --local",
     "migrate:staging": "wrangler d1 migrations apply DB --env staging --remote",

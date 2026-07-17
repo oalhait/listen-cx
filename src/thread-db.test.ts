@@ -1,8 +1,8 @@
 import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
-import { D1ThreadStore } from "../src/thread-db.js";
-import { authorizeManagementCapability } from "../src/thread-security.js";
-import { fingerprintContributionInput } from "../src/thread.js";
+import { D1ThreadStore } from "./thread-db.js";
+import { authorizeManagementCapability } from "./thread-security.js";
+import { fingerprintContributionInput } from "./thread.js";
 
 const LINK_SLUG = "song234";
 
@@ -117,6 +117,27 @@ describe("D1ThreadStore", () => {
     expect(count?.count).toBe(1);
   });
 
+  it("enforces the injected per-Thread contribution ceiling atomically", async () => {
+    const store = new D1ThreadStore(env.DB, {
+      maxThreads: 10,
+      maxContributionsPerThread: 1,
+    });
+    const created = await store.create("Bounded history");
+    if (created.status !== "created") throw new Error("thread not created");
+
+    const results = await Promise.all([
+      store.acceptContribution(created.thread.publicCapability, await contributionInput("first")),
+      store.acceptContribution(created.thread.publicCapability, await contributionInput("second")),
+    ]);
+
+    expect(results.filter((result) => result.status === "accepted")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "limit_reached")).toHaveLength(1);
+    const count = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM thread_contributions",
+    ).first<{ count: number }>();
+    expect(count?.count).toBe(1);
+  });
+
   it("returns an existing contribution for the same request and conflicts on changed input", async () => {
     const store = new D1ThreadStore(env.DB, { maxThreads: 10 });
     const created = await store.create("Duplicates");
@@ -136,6 +157,21 @@ describe("D1ThreadStore", () => {
     if (accepted.status === "accepted" && duplicate.status === "existing") {
       expect(duplicate.contribution.id).toBe(accepted.contribution.id);
     }
+    expect((await store.getView(created.thread.publicCapability))?.contributions).toHaveLength(1);
+  });
+
+  it("accepts concurrent identical request keys exactly once", async () => {
+    const store = new D1ThreadStore(env.DB, { maxThreads: 10 });
+    const created = await store.create("Concurrent retry");
+    if (created.status !== "created") throw new Error("thread not created");
+    const input = await contributionInput("same-request");
+
+    const results = await Promise.all([
+      store.acceptContribution(created.thread.publicCapability, input),
+      store.acceptContribution(created.thread.publicCapability, input),
+    ]);
+
+    expect(results.map((result) => result.status).sort()).toEqual(["accepted", "existing"]);
     expect((await store.getView(created.thread.publicCapability))?.contributions).toHaveLength(1);
   });
 
@@ -203,9 +239,22 @@ describe("D1ThreadStore", () => {
     );
     const removed = await store.removeContribution(authorization, first.contribution.id);
     const removedAgain = await store.removeContribution(authorization, first.contribution.id);
+    const removedRetry = await store.acceptContribution(
+      created.thread.publicCapability,
+      await contributionInput("request-1"),
+    );
+    const removedConflict = await store.acceptContribution(
+      created.thread.publicCapability,
+      await contributionInput("request-1", "changed-catalog"),
+    );
 
     expect(removed.status).toBe("removed");
     expect(removedAgain.status).toBe("removed");
+    expect(removedRetry).toMatchObject({
+      status: "existing",
+      contribution: { id: first.contribution.id, removedAt: expect.any(String) },
+    });
+    expect(removedConflict).toEqual({ status: "conflict" });
     if (removed.status === "removed") {
       expect(removed.contribution).toMatchObject({
         position: 1,

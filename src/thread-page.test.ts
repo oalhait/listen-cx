@@ -77,6 +77,8 @@ describe("threadPage", () => {
     expect(html).toContain('href="https://listen.cx/song123"');
     expect(html).toContain("Open in my provider");
     expect(html).toContain('data-copy-song="https://listen.cx/song123"');
+    expect(html).toContain("data-open-song");
+    expect(html).toContain('fetch("/api/thread-events"');
     expect(html).toContain('data-public-url="https://listen.cx/t/threadabc"');
     expect(html.indexOf("Kingston")).toBeLessThan(html.indexOf("Open in my provider"));
     expect(html).not.toContain("Remove Kingston");
@@ -115,6 +117,15 @@ describe("threadPage", () => {
     expect(closed).toContain("Contributions are closed");
     expect(closed).not.toContain('id="add-song-form"');
     expect(closed).toContain("Copy song link");
+  });
+
+  it("renders exhausted state without false remove-to-make-room guidance", () => {
+    const html = threadPage(model({ state: "exhausted" }));
+
+    expect(html).toContain("Contributions are complete");
+    expect(html).toContain("reached its lifetime contribution limit");
+    expect(html).not.toContain('id="add-song-form"');
+    expect(html).not.toContain("Remove a song to make room");
   });
 
   it("renders managed open controls without exposing private authority", () => {
