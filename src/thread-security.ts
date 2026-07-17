@@ -126,6 +126,40 @@ export function threadSecurityHeaders(): Record<string, string> {
   };
 }
 
+export function coarseNetworkKey(address: string | undefined): string {
+  if (!address) return "unknown-network";
+
+  const ipv4 = address.split(".");
+  if (
+    ipv4.length === 4 &&
+    ipv4.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255)
+  ) {
+    return `${ipv4[0]}.${ipv4[1]}.${ipv4[2]}.0/24`;
+  }
+
+  const value = address.toLowerCase().split("%", 1)[0] ?? "";
+  const halves = value.split("::");
+  if (halves.length > 2) return "unknown-network";
+  const left = halves[0]?.split(":").filter(Boolean) ?? [];
+  const right = halves[1]?.split(":").filter(Boolean) ?? [];
+  const omitted = halves.length === 2 ? 8 - left.length - right.length : 0;
+  if (omitted < 0 || (halves.length === 2 && omitted === 0)) {
+    return "unknown-network";
+  }
+  const groups = [...left, ...Array.from({ length: omitted }, () => "0"), ...right];
+  if (
+    groups.length !== 8 ||
+    groups.some((group) => !/^[a-f0-9]{1,4}$/.test(group))
+  ) {
+    return "unknown-network";
+  }
+  const prefix = groups
+    .slice(0, 4)
+    .map((group) => Number.parseInt(group, 16).toString(16))
+    .join(":");
+  return `${prefix}::/64`;
+}
+
 export function createCloudflareAttemptLimiter(
   binding: RateLimitBinding,
   scope: string,

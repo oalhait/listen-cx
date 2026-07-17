@@ -13,6 +13,8 @@ export interface ContributionIdentity {
   sourceStorefront: string;
 }
 
+export type ContributionSourceIdentity = Omit<ContributionIdentity, "linkSlug">;
+
 export interface ThreadCapabilities {
   publicCapability: string;
   managementCapability: string;
@@ -46,11 +48,10 @@ export async function digestManagementCapability(capability: string): Promise<st
 }
 
 export async function fingerprintContributionInput(
-  identity: ContributionIdentity,
+  identity: ContributionSourceIdentity,
 ): Promise<string> {
   return sha256(
     JSON.stringify([
-      identity.linkSlug,
       identity.sourceProvider,
       identity.sourceCatalogId,
       identity.sourceStorefront,

@@ -1,8 +1,14 @@
 import { env, exports } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { createThreadLimiters, getThreadMaximum } from "../src/worker.js";
 
 describe("worker", () => {
+  beforeEach(async () => {
+    await env.DB.prepare("DELETE FROM thread_contributions").run();
+    await env.DB.prepare("DELETE FROM threads").run();
+    await env.DB.prepare("DELETE FROM links").run();
+  });
+
   it("serves the health check through the Worker entrypoint", async () => {
     const response = await exports.default.fetch("https://staging.example/healthz");
     expect(response.status).toBe(200);
@@ -17,5 +23,30 @@ describe("worker", () => {
       creation: { check: expect.any(Function) },
       contribution: { check: expect.any(Function) },
     });
+  });
+
+  it("wires the configured Thread store and limiter dependencies into the entrypoint", async () => {
+    const page = await exports.default.fetch("https://staging.listen.cx/threads/new");
+    expect(page.status).toBe(200);
+    expect(page.headers.get("x-robots-tag")).toContain("noindex");
+
+    const response = await exports.default.fetch("https://staging.listen.cx/api/threads", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "cf-connecting-ip": "203.0.113.40",
+      },
+      body: JSON.stringify({ title: "Worker wiring" }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({
+      publicUrl: expect.stringMatching(/^https:\/\/staging\.listen\.cx\/t\//),
+      managementUrl: expect.stringContaining("#manage="),
+    });
+    const count = await env.DB.prepare("SELECT COUNT(*) AS count FROM threads").first<{
+      count: number;
+    }>();
+    expect(count?.count).toBe(1);
   });
 });

@@ -265,7 +265,7 @@ async function activateManagement(){
   try{token=decodeURIComponent(location.hash.slice("#manage=".length));}
   catch{history.replaceState(null,"",cleanUrl);setStatus("That private management link is invalid or no longer available.","error");return;}
   let response;
-  try{response=await fetch(activationAction,{method:"POST",headers:{"Content-Type":"application/json","X-Listen-Action":"activate-management"},body:JSON.stringify({token})});}
+  try{response=await fetch(activationAction,{method:"POST",headers:{"Content-Type":"application/json","x-listen-management-action":"1"},body:JSON.stringify({token})});}
   catch{history.replaceState(null,"",cleanUrl);setStatus("That private management link could not be checked. Try opening it again.","error");return;}
   history.replaceState(null,"",cleanUrl);
   if(response.ok){location.reload();return;}
@@ -286,9 +286,9 @@ if(addForm){
     finally{submit.disabled=false;submit.textContent="Add song";}
   });
 }
-for(const button of document.querySelectorAll("[data-remove-action]")){button.addEventListener("click",async()=>{button.disabled=true;try{const response=await fetch(button.dataset.removeAction||"",{method:"POST",headers:{"X-Listen-Action":"remove-song"}});if(response.ok){location.reload();return;}const data=await response.json().catch(()=>({}));setStatus(typeof data.error==="string"?data.error:"Couldn’t remove that song.","error");}catch{setStatus("Couldn’t remove that song. Try again.","error");}finally{button.disabled=false;}});}
+for(const button of document.querySelectorAll("[data-remove-action]")){button.addEventListener("click",async()=>{button.disabled=true;try{const response=await fetch(button.dataset.removeAction||"",{method:"POST",headers:{"x-listen-management-action":"1"}});if(response.ok){location.reload();return;}const data=await response.json().catch(()=>({}));setStatus(typeof data.error==="string"?data.error:"Couldn’t remove that song.","error");}catch{setStatus("Couldn’t remove that song. Try again.","error");}finally{button.disabled=false;}});}
 const closeButton=document.querySelector("[data-close-action]");
-if(closeButton){closeButton.addEventListener("click",async()=>{if(!confirm("Close contributions permanently? This Thread cannot be reopened."))return;closeButton.disabled=true;try{const response=await fetch(closeButton.dataset.closeAction||"",{method:"POST",headers:{"X-Listen-Action":"close-thread"}});if(response.ok){location.reload();return;}const data=await response.json().catch(()=>({}));setStatus(typeof data.error==="string"?data.error:"Couldn’t close this Thread.","error");}catch{setStatus("Couldn’t close this Thread. Try again.","error");}finally{closeButton.disabled=false;}});}
+if(closeButton){closeButton.addEventListener("click",async()=>{if(!confirm("Close contributions permanently? This Thread cannot be reopened."))return;closeButton.disabled=true;try{const response=await fetch(closeButton.dataset.closeAction||"",{method:"POST",headers:{"x-listen-management-action":"1"}});if(response.ok){location.reload();return;}const data=await response.json().catch(()=>({}));setStatus(typeof data.error==="string"?data.error:"Couldn’t close this Thread.","error");}catch{setStatus("Couldn’t close this Thread. Try again.","error");}finally{closeButton.disabled=false;}});}
 activateManagement();
 </script></body></html>`;
 }

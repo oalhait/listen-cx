@@ -59,5 +59,9 @@ describe("Contribution identifiers", () => {
     await expect(
       fingerprintContributionInput({ ...input, sourceCatalogId: "different" }),
     ).resolves.not.toBe(await fingerprintContributionInput(input));
+    const sameSourceDifferentLink = { ...input, linkSlug: "another-link" };
+    await expect(fingerprintContributionInput(sameSourceDifferentLink)).resolves.toBe(
+      await fingerprintContributionInput(input),
+    );
   });
 });

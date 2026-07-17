@@ -177,10 +177,35 @@ describe("threadPage", () => {
     expect(html).toContain('location.hash.startsWith("#manage=")');
     expect(html).toContain('fetch(activationAction');
     expect(html).toContain('method:"POST"');
+    expect(html).toContain('"x-listen-management-action":"1"');
+    expect(html).not.toContain('"X-Listen-Action":"activate-management"');
     expect(html).toContain('history.replaceState(null,"",cleanUrl)');
     expect(html).toContain("That private management link is invalid or no longer available.");
     expect(html).toContain("if(response.ok){location.reload();return;}");
     expect(html).toContain('copied?"success":"error"');
+  });
+
+  it("sends the exact management action header for remove and close", () => {
+    const html = threadPage(
+      model({
+        managed: true,
+        actions: {
+          add: "/api/threads/threadabc/contributions",
+          activateManagement: "/t/threadabc/manage/activate",
+          close: "/t/threadabc/manage/close",
+        },
+        songs: [
+          {
+            ...model().songs[0]!,
+            removeAction: "/t/threadabc/manage/contributions/contribution-1/remove",
+          },
+        ],
+      }),
+    );
+
+    expect(html.match(/"x-listen-management-action":"1"/g)).toHaveLength(3);
+    expect(html).not.toContain('"X-Listen-Action":"remove-song"');
+    expect(html).not.toContain('"X-Listen-Action":"close-thread"');
   });
 
   it("uses noindex, no-referrer, system fonts, reduced motion, and 48px controls", () => {

@@ -3,6 +3,8 @@ import { env } from "cloudflare:workers";
 import { createApp } from "../src/app.js";
 import { D1LinkStore } from "../src/db.js";
 import type { Resolved } from "../src/resolve.js";
+import { D1ThreadStore } from "../src/thread-db.js";
+import { allowAllAttemptLimiter } from "../src/thread-security.js";
 import { appleSearchUrl } from "../src/urls.js";
 
 const RESOLVED: Resolved = {
@@ -49,14 +51,27 @@ function createResponse(value: unknown): CreateResponse {
 function makeApp(resolved: Resolved | null = RESOLVED) {
   const store = new D1LinkStore(env.DB);
   const resolver = { resolve: async () => resolved } as any;
-  const app = createApp({ resolver, store, baseUrl: "https://x.link" });
+  const app = createApp(appDeps(resolver, store));
   return { app, store };
 }
 
 function makeFailingApp() {
   const store = new D1LinkStore(env.DB);
   const resolver = { resolve: async () => Promise.reject(new Error("provider unavailable")) } as any;
-  return createApp({ resolver, store, baseUrl: "https://x.link" });
+  return createApp(appDeps(resolver, store));
+}
+
+function appDeps(resolver: any, store: D1LinkStore) {
+  return {
+    resolver,
+    store,
+    threadStore: new D1ThreadStore(env.DB, { maxThreads: 10_000 }),
+    threadLimiters: {
+      creation: allowAllAttemptLimiter(),
+      contribution: allowAllAttemptLimiter(),
+    },
+    baseUrl: "https://x.link",
+  };
 }
 
 describe("routes", () => {
@@ -64,6 +79,8 @@ describe("routes", () => {
   let slug: string;
 
   beforeEach(async () => {
+    await env.DB.prepare("DELETE FROM thread_contributions").run();
+    await env.DB.prepare("DELETE FROM threads").run();
     await env.DB.prepare("DELETE FROM links").run();
     ({ app } = makeApp());
     const res = await app.request("/create", {
@@ -93,7 +110,7 @@ describe("routes", () => {
     async (preference) => {
     const resolve = vi.fn(async () => RESOLVED);
     const store = new D1LinkStore(env.DB);
-    const converter = createApp({ resolver: { resolve } as any, store, baseUrl: "https://x.link" });
+    const converter = createApp(appDeps({ resolve }, store));
     const sourceUrl = "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC";
 
     const res = await converter.request(`/${sourceUrl}`, { headers: { cookie: `pref=${preference}` } });
@@ -110,7 +127,7 @@ describe("routes", () => {
   it("preserves Apple deep-link query parameters when converting a path URL", async () => {
     const resolve = vi.fn(async () => RESOLVED);
     const store = new D1LinkStore(env.DB);
-    const converter = createApp({ resolver: { resolve } as any, store, baseUrl: "https://x.link" });
+    const converter = createApp(appDeps({ resolve }, store));
     const sourceUrl = "https://music.apple.com/us/album/kingston/1443108737?i=1443109064";
 
     const res = await converter.request(`/${sourceUrl}`);

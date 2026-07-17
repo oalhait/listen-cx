@@ -4,6 +4,7 @@ import {
   MANAGEMENT_ACTION_HEADER,
   MANAGEMENT_ACTION_VALUE,
   authorizeManagementCapability,
+  coarseNetworkKey,
   createCloudflareAttemptLimiter,
   fixedAttemptLimiter,
   getManagementCookie,
@@ -154,6 +155,13 @@ describe("Thread response headers", () => {
 });
 
 describe("Cloudflare attempt limiter", () => {
+  it("coarsens network addresses before they become limiter input", () => {
+    expect(coarseNetworkKey("203.0.113.47")).toBe("203.0.113.0/24");
+    expect(coarseNetworkKey("2001:db8:abcd:12::9")).toBe("2001:db8:abcd:12::/64");
+    expect(coarseNetworkKey("not-an-address")).toBe("unknown-network");
+    expect(coarseNetworkKey(undefined)).toBe("unknown-network");
+  });
+
   it("provides deterministic allow and deny adapters for tests", async () => {
     await expect(
       fixedAttemptLimiter({ allowed: true, retryAfterSeconds: null }).check("ignored"),

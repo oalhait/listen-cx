@@ -3,6 +3,7 @@ import { ItunesClient } from "./itunes.js";
 import { Resolver } from "./resolve.js";
 import { SpotifyClient } from "./spotify.js";
 import { createApp } from "./app.js";
+import { D1ThreadStore } from "./thread-db.js";
 import {
   createCloudflareAttemptLimiter,
   type AttemptLimiter,
@@ -47,9 +48,12 @@ export function getThreadMaximum(env: ThreadConfigurationBindings): number {
 export default {
   fetch(request, env) {
     const baseUrl = env.BASE_URL || new URL(request.url).origin;
+    const maximumThreads = getThreadMaximum(env);
     const app = createApp({
       resolver: new Resolver(new SpotifyClient(), new ItunesClient()),
       store: new D1LinkStore(env.DB),
+      threadStore: new D1ThreadStore(env.DB, { maxThreads: maximumThreads }),
+      threadLimiters: createThreadLimiters(env),
       baseUrl: baseUrl.replace(/\/$/, ""),
     });
     return app.fetch(request);
