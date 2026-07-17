@@ -43,7 +43,7 @@ Friends already trade songs in group chats and assemble playlists around shared 
 
 | Track | Deliverable | Decision | Trigger or dependency | Backing plan |
 |---|---|---|---|---|
-| Foundation | Threads MVP | Build and dogfood unlisted chronological Threads with repeat contribution, creator moderation, per-song handoff, and copy-anytime snapshots to both providers in staging. | Native handoff matrix, provider credentials, and staging abuse bounds. | [`2026-07-13-002-feat-private-pass-the-aux-threads-plan.md`](2026-07-13-002-feat-private-pass-the-aux-threads-plan.md) |
+| Foundation | Thread Core | Build and dogfood unlisted chronological Threads with repeat contribution, creator moderation, and per-song handoff. | Native handoff matrix and staging abuse bounds; provider export credentials do not block this gate. | [`2026-07-13-002-feat-private-pass-the-aux-threads-plan.md`](2026-07-13-002-feat-private-pass-the-aux-threads-plan.md) |
 | MVP capability | Provider playlist export | Treat every export as an independent snapshot. Prove Apple Music and the allowlisted Spotify path without retaining connected-provider identity. | Apple MusicKit browser proof; Spotify allowlist, quota, and policy gates. | [`2026-07-13-004-feat-provider-playlist-export-plan.md`](2026-07-13-004-feat-provider-playlist-export-plan.md) |
 | Follow-on | Thread character | Re-scope deterministic visual character around the freeform Thread after contribution and export behavior is understood. | Threads show repeat contribution and export demand. | [`2026-07-13-003-feat-declared-thread-character-plan.md`](2026-07-13-003-feat-declared-thread-character-plan.md) |
 | Future horizon | Durable ownership and public Threads | Add ownership, publishing, joinability, discovery, and granular permissions only after the unlisted collaboration model proves useful. | Separate identity, moderation, privacy, legal, and abuse decisions. | [`2026-07-13-005-feat-public-thread-ownership-publishing-plan.md`](2026-07-13-005-feat-public-thread-ownership-publishing-plan.md) |
@@ -63,13 +63,14 @@ Friends already trade songs in group chats and assemble playlists around shared 
 - R3. Each accepted contribution resolves once into the existing provider-neutral song representation and exposes Open in my provider plus Copy song link using its canonical listen.cx URL.
 - R4. A1 can remove a contribution or irreversibly close further contribution after confirmation without removing existing listening or export access.
 - R5. Anonymous creation and contribution use bounded Thread size, input validation, and abuse controls rather than person-level identity.
+- R11. Thread creation has its own rate and resource limits, and titles are bounded plain text rendered without active markup.
 
 **Snapshot export**
 
 - R6. A2 can copy the Thread's current ordered eligible songs to a supported provider whether contribution is open or closed, provided at least one song is eligible.
 - R7. Every export is an independent point-in-time snapshot and never promises to update an existing provider playlist.
 - R8. Export requests provider authorization only after A2 chooses a destination, and export failure never blocks the Thread or its individual song handoffs.
-- R9. Staging exposes Apple Music export after MusicKit proof and Spotify export only to its allowlisted cohort; production exposes each provider only after its own operational and policy gates clear.
+- R9. Staging exposes Apple Music export after MusicKit proof and Spotify export only to its allowlisted cohort; production exposes each provider only after its own operational and policy gates clear, and the public release is not called the Threads MVP until at least one export provider is production-ready.
 
 **Later roadmap**
 
@@ -84,8 +85,13 @@ flowchart TB
   C --> D["Song joins the chronological Thread"]
   D --> E["Open one song in the receiver's provider"]
   D --> F["Copy the current Thread to a provider"]
-  F --> G["Authorize only the destination provider"]
-  G --> H["Create an independent playlist snapshot"]
+  F --> Z{"Any exact candidates?"}
+  Z -->|No| X["Explain why export is unavailable"]
+  Z -->|Yes| G["Authorize only the destination provider"]
+  G --> V["Revalidate market or storefront availability"]
+  V -->|Set changed| W["Confirm the authoritative song set"]
+  V -->|Unchanged| H["Create an independent playlist snapshot"]
+  W --> H
   D --> C
 ```
 
@@ -104,7 +110,7 @@ flowchart TB
 - F3. **Copy the current Thread**
   - **Trigger:** A2 wants provider-native playlist playback.
   - **Actors:** A2.
-  - **Steps:** A2 chooses Apple Music or Spotify, reviews current coverage, authorizes that provider, and creates a playlist from the current ordered snapshot.
+  - **Steps:** A2 chooses Apple Music or Spotify and reviews current exact coverage. Zero candidates end without authorization. Otherwise A2 authorizes that provider, reviews and reconfirms any storefront or market changes, then creates a playlist from the authoritative ordered snapshot.
   - **Outcome:** A2 owns a native playlist copy while the source Thread may continue changing independently.
   - **Covered by:** R6-R9.
 
@@ -143,6 +149,7 @@ flowchart TB
 
 - Apple Music and an allowlisted Spotify tester each create a correctly ordered playlist snapshot from the current Thread.
 - Each adapter passes the mixed-origin coverage and correctness gate in the export plan before it is considered staging-ready.
+- At least three of the first 10 seeded dogfood Threads produce an export start by a participant; authorization cancellation counts as intent while technical success remains measured separately.
 - Thread creation, repeat contribution, individual song actions, and failed export complete without listen.cx account creation or persistent provider identity.
 
 Dogfood instrumentation measures Thread creation, first and second contribution, repeat contribution, export start, and export outcome without storing raw provider links, capability values, or cross-Thread identity.

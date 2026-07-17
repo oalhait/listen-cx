@@ -50,7 +50,7 @@ Individual provider handoff makes every song accessible, but listening to a sequ
 - R1. A1 can start an export from an open or closed Thread when at least one song is eligible, and the export captures the ordered songs present at that moment.
 - R2. Later Thread additions, removals, or closure do not update, delete, or relabel an earlier provider playlist.
 - R3. Repeating export creates another independent snapshot rather than finding or updating a prior export.
-- R4. A song is a pre-authorization candidate only when listen.cx stores its source provider, destination catalog identifier, and exact-match provenance; heuristic URLs and search fallbacks are ineligible. Export preserves candidate order and intentional repeats when the provider permits them.
+- R4. A song is a pre-authorization candidate only when listen.cx stores its source provider, destination catalog identifier, and exact-match evidence provenance; heuristic URLs and search fallbacks are ineligible. The source catalog identity is immediately eligible for same-provider export, while optional credential-backed enrichment may add exact cross-provider identity in separate export metadata without mutating the core song record. Export preserves candidate order and intentional repeats when the provider permits them.
 
 **Authorization and provider writes**
 
@@ -59,13 +59,15 @@ Individual provider handoff makes every song accessible, but listening to a sequ
 - R7. A successful export creates a native playlist in A1's chosen provider and presents an honest success result.
 - R8. Cancellation, denial, subscription limits, unavailable tracks, provider errors, and ambiguous writes produce distinct outcomes that do not mutate the Thread.
 - R9. Export uses only the provider access needed for the requested playlist write and does not create a listen.cx account or persistent connected-provider identity. listen.cx never persists refresh tokens or provider access credentials and never places credentials in URLs, logs, or analytics; provider-managed browser authorization may remain under provider control.
+- R16. Every authorization result is bound to one short-lived, single-use export intent containing the originating browser, provider, Thread snapshot, and return destination. Unsolicited, expired, reused, browser-mismatched, provider-mismatched, or snapshot-mismatched results cannot create a playlist and return safely to the Thread.
+- R17. Export works without popup-only behavior on mobile. After authorization, the flow restores the same Thread, provider, and snapshot context, returns focus to the authoritative coverage or result state, and announces cancellation, changed coverage, failure, or success to assistive technology.
 
 **Availability**
 
 - R10. Staging supports Apple Music export after MusicKit credential and browser proof.
 - R11. Staging supports Spotify export for the development-mode allowlist after OAuth registration and policy review.
 - R12. Production exposes a provider only after its credentials, operational behavior, quota, and policy requirements are satisfied.
-- R13. Before an adapter passes staging, a fixed 50-track mixed-origin corpus must produce no incorrect included songs and at least 80% eligible destination coverage in each source-to-destination direction.
+- R13. Before an adapter passes staging, a fixed 50-track mixed-origin corpus plus the credential-backed enrichment path must produce no incorrect included songs and at least 80% eligible destination coverage in each source-to-destination direction. Same-provider source identities establish the baseline but do not satisfy the cross-provider coverage gate by themselves.
 
 **Negative contract**
 
@@ -77,7 +79,7 @@ Individual provider handoff makes every song accessible, but listening to a sequ
 - F1. **Copy the current Thread**
   - **Trigger:** A1 wants provider-native sequence playback.
   - **Actors:** A1.
-  - **Steps:** A1 selects export, chooses a provider, reviews exact coverage, accepts any omissions, authorizes the provider, and requests playlist creation from the captured order.
+  - **Steps:** A1 selects export, chooses a provider, reviews exact coverage and the one-time snapshot explanation, and accepts any omissions. Zero candidates end without authorization. Otherwise A1 authorizes the provider, revalidates market or storefront availability, reconfirms any changed set, and requests playlist creation from the authoritative captured order.
   - **Outcome:** A1 receives a native playlist snapshot and the source Thread remains unchanged.
   - **Covered by:** R1, R4-R9.
 - F2. **Export again after the Thread changes**
@@ -91,7 +93,7 @@ Individual provider handoff makes every song accessible, but listening to a sequ
   - **Actors:** A1.
   - **Steps:** A1 receives a classified failure and returns to the source Thread.
   - **Outcome:** All Thread contribution, management, sharing, and individual handoff behavior remains intact.
-  - **Covered by:** R8, R13-R14.
+  - **Covered by:** R8, R14-R15.
 
 ### Acceptance Examples
 
@@ -120,6 +122,21 @@ Individual provider handoff makes every song accessible, but listening to a sequ
   - **Given:** Spotify export is implemented but public quota or policy clearance is missing.
   - **When:** A non-allowlisted production participant views export options.
   - **Then:** Spotify is not presented as an available export path.
+- AE6. **Authorization cannot escape its export intent**
+  - **Covers:** R9, R16-R17.
+  - **Given:** A browser starts one provider export for a captured Thread snapshot.
+  - **When:** an authorization result is replayed, expired, reused, opened from another browser, or returned for another provider or snapshot.
+  - **Then:** No playlist write occurs, the result is classified safely, and the user can return to the source Thread without losing individual song or contribution access.
+- AE7. **Snapshot meaning is visible before authorization**
+  - **Covers:** R1-R3, R6.
+  - **Given:** A1 has chosen a destination with at least one eligible song.
+  - **When:** A1 reviews coverage before authorization.
+  - **Then:** The page explains that it will create a new playlist with the shown song count and that later Thread changes will not update it.
+- AE8. **Partial and ambiguous writes do not imply a safe retry**
+  - **Covers:** R7-R8.
+  - **Given:** The provider creates a playlist but only some additions are confirmed, or the final write result is unknown.
+  - **When:** A1 sees the result.
+  - **Then:** The page says a playlist may exist, reports confirmed, omitted, and unknown counts, links to the provider destination when available, and tells A1 to inspect the library before explicitly starting another independent snapshot.
 
 ### Success Criteria
 
@@ -128,6 +145,7 @@ Individual provider handoff makes every song accessible, but listening to a sequ
 - Each adapter passes the 50-track mixed-origin corpus gate with zero incorrect included songs and at least 80% eligible coverage in both directions.
 - A later Thread change leaves each earlier provider playlist unchanged and a later export captures the new state.
 - Cancellation, known failure, and ambiguous write states never trigger an automatic second playlist creation.
+- Partial or ambiguous writes never present Retry as idempotent and disclose the confirmed state plus any provider destination that is known.
 - Thread loads and individual song handoffs or copy actions produce no provider authorization or export-side effects.
 
 ### Scope Boundaries
@@ -147,7 +165,7 @@ Individual provider handoff makes every song accessible, but listening to a sequ
 
 ### Dependencies and Assumptions
 
-- Thread storage supplies a stable ordered snapshot plus source-provider, destination catalog ID, and match provenance for each song. A heuristic cross-provider URL never counts as exact export eligibility.
+- Thread storage supplies a stable ordered snapshot. Separate export metadata supplies source-provider catalog identity, destination catalog ID, and evidence provenance; same-provider source IDs are exact immediately, while cross-provider IDs require credential-backed enrichment. A heuristic cross-provider URL never counts as exact export eligibility.
 - Apple Music playlist creation requires Music User Token authorization and live MusicKit web verification.
 - Spotify playlist creation and addition require OAuth playlist-modification permission.
 - Spotify development mode permits up to five allowlisted authenticated users and requires the app owner to have Premium.
