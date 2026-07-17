@@ -13,10 +13,10 @@ execution: code
 
 ## Goal Capsule
 
-- **Objective:** Evolve listen.cx from a one-song sharing utility into a lightweight way for friends to build and hear a shared sequence across music providers.
-- **Product authority:** The receiver-side, no-account, cross-provider playback thesis remains authoritative. Native playlist export and public social features must not complicate contributing to or opening a thread.
-- **Resolved wedge:** Optimize first for a repeatable, prompt-led “pass the aux” round in an existing small group chat: one friend starts a five-song handoff and the finished index is shared back to the chat. Party and trip variants would pull the product toward synchronized playback or provider-native control.
-- **Open release dependency:** Verify native Apple Music and Spotify handoff on iOS and macOS before treating a completed thread as ready to listen.
+- **Objective:** Evolve listen.cx from a one-song sharing utility into the lightest way for friends to build a cross-provider playlist together.
+- **Product authority:** Creating, contributing, sharing, and opening songs remain account-free. Provider authorization appears only when someone copies a thread into their own music library.
+- **MVP:** An unlisted chronological Thread with repeat contribution, individual song handoff, creator moderation, and copy-anytime playlist snapshots.
+- **Open blockers:** Native handoff still needs its iOS/macOS staging matrix. Apple Music export needs live MusicKit credentials and browser proof. Spotify export is limited to an allowlisted staging cohort until its quota and policy gates clear.
 
 ---
 
@@ -24,160 +24,155 @@ execution: code
 
 ### Summary
 
-Introduce Pass the Aux as a finite, unlisted group-chat relay. A host passes an invite along; each participant adds a provider-agnostic song to a purposeful position in a shared sequence. Character, export, public discovery, and music intelligence arrive only after the core contribution loop proves useful.
+Introduce Threads as unlisted collaborative song lists. Anyone with the link can add songs, open each song through their preferred provider, or copy the current ordered list into Spotify or Apple Music as a point-in-time playlist snapshot.
 
 ### Problem Frame
 
-People already build shared playlists through group-chat links, screenshots, and fragmented provider-specific collections. The work is social but the result is not portable: a contributor's preferred service can become a constraint for everyone else. A generic collaborative playlist would reproduce the usual link dump without giving the group a reason to finish something together.
+Friends already trade songs in group chats and assemble playlists around shared moments, but provider boundaries fragment the result. Existing collaborative playlists solve editing only for people inside the same provider. listen.cx can make the shared list portable without making accounts or provider connections prerequisites for participation.
 
 ### Key Decisions
 
-- **Finite threads before ongoing rooms.** A short, completable sequence gives every contribution an editorial purpose and avoids the moderation and identity burden of an endless shared collection.
-- **Group chat is the first coordination surface.** listen.cx supplies the finite artifact; the existing chat supplies conversation, notification, and social context.
-- **Contribution is the game.** Thread slots or prompts should create a musical handoff; abstract points, leaderboards, and voting do not improve the shared listening result.
-- **Character begins with declared signals.** Prompt, role, sequence, artwork palette, and optional participant mood cues may shape the visual treatment before any automated music interpretation is trusted.
-- **Export is opt-in and post-completion.** Saving a completed thread as a native playlist requires provider authorization and is not part of the low-touch contribution or playback path.
-- **Public identity comes later.** Threads stay unlisted by default. Publishing, joinability, and permissioning require durable ownership and moderation decisions that the no-account MVP should not pretend to solve.
+- **Freeform Threads replace the five-role relay.** (session-settled: user-directed — chosen over Opener/Build/Peak/Curveball/Closer: the first version should make collaborative playlist building obvious before adding ritual.) Contributions appear chronologically and a participant may add more than one song.
+- **Export copies the current Thread.** (session-settled: user-directed — chosen over finish-before-export and continuous synchronization: a snapshot delivers provider-native playback without long-lived connections or a completion ceremony.) Later Thread changes do not alter an exported playlist.
+- **The creator keeps narrow moderation powers.** (session-settled: user-directed — chosen over removal-only or no creator controls: the creator needs to fix mistakes, stop abuse, and close contribution without an account.) The management capability is separate from the shared Thread link.
+- **Both provider adapters belong in staging.** (session-settled: user-directed — chosen over Apple-only dogfood or blocking on public parity: the product should prove both paths while Spotify remains limited to its allowlisted cohort.) Public Spotify export stays gated on provider quota and policy clearance.
+- **Provider authorization stays at the edge.** Contribution, sharing, per-song listening, and Thread viewing never require a listen.cx or provider account. Only the person requesting export authorizes the destination provider.
+- **Character follows demonstrated utility.** Visual characterization and music intelligence remain separate follow-ons. They must improve contribution or make the finished Thread more useful, not become generic scoring.
 
 ### Roadmap and Plan Set
 
 | Track | Deliverable | Decision | Trigger or dependency | Backing plan |
 |---|---|---|---|---|
-| Foundation | Private Pass the Aux MVP | Build and dogfood a five-role group-chat relay with account-free contribution, separate invite/host capabilities, atomic slot claims, and existing cross-provider playback. | Native handoff must pass the staging device matrix before release. | [`2026-07-13-002-feat-private-pass-the-aux-threads-plan.md`](2026-07-13-002-feat-private-pass-the-aux-threads-plan.md) |
-| Follow-on A | Declared thread character | Test deterministic in-progress role feedback and a richer completed “thread print.” No scores, inferred taste, or ambient motion. | The private-thread recruitment/completion gate passes. This does not depend on export. | [`2026-07-13-003-feat-declared-thread-character-plan.md`](2026-07-13-003-feat-declared-thread-character-plan.md) |
-| Follow-on B | Native provider export | Run an Apple Music staging spike. Keep Spotify internal-only until public quota and cross-service policy gates are cleared. | Completed immutable threads exist. This may proceed independently of character. | [`2026-07-13-004-feat-provider-playlist-export-plan.md`](2026-07-13-004-feat-provider-playlist-export-plan.md) |
-| Future horizon | Durable ownership and public threads | Split into four gates: ownership, share-only publishing, passkey-backed proposals, then opt-in discovery/indexing. Private contribution and listening remain account-free. | Demonstrated demand to publish beyond the originating chat plus separate moderation, privacy, legal, and abuse gates. | [`2026-07-13-005-feat-public-thread-ownership-publishing-plan.md`](2026-07-13-005-feat-public-thread-ownership-publishing-plan.md) |
-| Research gate | Embedding-based music intelligence | Do not implement from provider previews or open models. Only reopen after a contract-backed enrichment source passes rights, coverage, cost, human-fit, and false-objectivity gates against `declared-v1`. | A lawful provider-independent signal exists and the declared baseline is frozen. | [`2026-07-13-006-research-embedding-music-intelligence-decision.md`](2026-07-13-006-research-embedding-music-intelligence-decision.md) |
-
-### MVP Boundary
-
-The first shippable unit is Phase 1 only: one fixed five-role template—Opener, Build, Peak, Curveball, Closer—inside an unlisted group-chat relay. It includes host close/remove controls, account-free Spotify/Apple contribution, ordered completion, existing receiver-side playback, a staging-only feature gate, and privacy-bounded funnel instrumentation.
-
-Character, provider export, public identity/publishing, discovery, and music intelligence are not MVP dependencies. They must not add authorization, SDK loading, provider calls, or identity requirements to the private contribution and playback paths.
-
-Phase 1 listening is an ordered index of independent provider handoffs, not continuous playback: each song opens separately in the listener's provider. The MVP validates the contribution ritual and portable finished artifact. Native export is the later path to provider-managed sequence playback, so weak repeat listening alone must not be interpreted as failure of collaborative contribution.
-
-### MVP Security and Privacy Posture
-
-- “Unlisted” means bearer access, not confidentiality or recipient identity. Anyone holding the invite may view and contribute during the write window.
-- Invite, management, contributor, and idempotency capabilities are high-entropy and least-privilege. The management secret is delivered separately, must be saved by the host, has no identity-based recovery in the private MVP, and must not enter unfurls, application logs, analytics, referrers, or third-party page dependencies.
-- Anonymous creation and contribution use bounded inputs, finite slots, provider-URL prevalidation, and a staging feature gate. A production rate-limit decision is required after measuring resolver amplification; account creation is not the abuse control.
-- The MVP has a seven-day contribution window and a 180-day unlisted view window. It does not claim physical deletion or invite revocation; those remain explicit follow-ups rather than hidden promises.
-- Distinct-contributor measurement is advisory and per-thread/per-browser only. Instrumentation stores aggregate thread facts without raw IPs, device fingerprints, cross-thread participant identity, prompts, provider URLs, or capability values.
+| Foundation | Threads MVP | Build and dogfood unlisted chronological Threads with repeat contribution, creator moderation, per-song handoff, and copy-anytime snapshots to both providers in staging. | Native handoff matrix, provider credentials, and staging abuse bounds. | [`2026-07-13-002-feat-private-pass-the-aux-threads-plan.md`](2026-07-13-002-feat-private-pass-the-aux-threads-plan.md) |
+| MVP capability | Provider playlist export | Treat every export as an independent snapshot. Prove Apple Music and the allowlisted Spotify path without retaining connected-provider identity. | Apple MusicKit browser proof; Spotify allowlist, quota, and policy gates. | [`2026-07-13-004-feat-provider-playlist-export-plan.md`](2026-07-13-004-feat-provider-playlist-export-plan.md) |
+| Follow-on | Thread character | Re-scope deterministic visual character around the freeform Thread after contribution and export behavior is understood. | Threads show repeat contribution and export demand. | [`2026-07-13-003-feat-declared-thread-character-plan.md`](2026-07-13-003-feat-declared-thread-character-plan.md) |
+| Future horizon | Durable ownership and public Threads | Add ownership, publishing, joinability, discovery, and granular permissions only after the unlisted collaboration model proves useful. | Separate identity, moderation, privacy, legal, and abuse decisions. | [`2026-07-13-005-feat-public-thread-ownership-publishing-plan.md`](2026-07-13-005-feat-public-thread-ownership-publishing-plan.md) |
+| Research gate | Music intelligence | Revisit embeddings only when a lawful provider-independent signal passes rights, coverage, cost, and human-fit gates. | A contract-backed enrichment source and a stable non-embedding baseline. | [`2026-07-13-006-research-embedding-music-intelligence-decision.md`](2026-07-13-006-research-embedding-music-intelligence-decision.md) |
 
 ### Actors
 
-- A1. **Host:** Starts a thread and passes its invitation to a small group.
-- A2. **Contributor:** Adds one song from Spotify or Apple Music to a meaningful open position.
-- A3. **Listener:** Opens a completed thread and listens to any song in their preferred provider.
-- A4. **Future publisher:** Chooses whether a thread becomes visible beyond its original invitees.
+- A1. **Creator:** Starts an unlisted Thread, shares it, and retains its private management capability.
+- A2. **Participant:** Uses the shared link to add songs, listen, and copy snapshots without a listen.cx account.
 
 ### Requirements
 
-**Phase 1 — private Pass the Aux threads**
+**Thread collaboration**
 
-- R1. A1 can create an unlisted, finite music thread with a title and optional prompt.
-- R2. A thread presents a small set of purposeful song positions that form an ordered listening sequence.
-- R3. A2 can open an invitation and contribute one active Spotify or Apple Music track per browser without creating an account. This is an advisory limit, not a claim of person-level identity.
-- R4. Each accepted contribution resolves once into the existing cross-provider track representation and remains individually playable through A3's provider preference.
-- R5. A1 receives a separate private management capability to close the thread or remove an unsuitable contribution without turning the public invite into an editor; losing that capability has no identity-based recovery in the private MVP.
-- R6. The fifth accepted contribution completes the thread and makes invite-level contribution read-only. Closing an incomplete thread leaves a playable partial mix; host removal from a completed mix reopens that role for the bounded replacement window defined by the private-thread plan.
+- R1. A1 can create an unlisted Thread with a title and receive separate share and management capabilities without creating an account.
+- R2. A2 can view the Thread as a chronological list and add multiple Spotify or Apple Music tracks through one prominent contribution action.
+- R3. Each accepted contribution resolves once into the existing provider-neutral song representation and exposes Open in my provider plus Copy song link using its canonical listen.cx URL.
+- R4. A1 can remove a contribution or irreversibly close further contribution after confirmation without removing existing listening or export access.
+- R5. Anonymous creation and contribution use bounded Thread size, input validation, and abuse controls rather than person-level identity.
 
-**Phase 2 — thread character**
+**Snapshot export**
 
-- R7. A thread has a visual identity derived from the group’s declared prompt, roles, sequencing, artwork, and optional mood signals. A contributor may add a cue after track acceptance, but skipping it never blocks contribution or valid character rendering.
-- R8. The identity makes the sequence easier to understand and more desirable to share; it is not a cosmetic score or a claim of objective musical analysis.
+- R6. A2 can copy the Thread's current ordered eligible songs to a supported provider whether contribution is open or closed, provided at least one song is eligible.
+- R7. Every export is an independent point-in-time snapshot and never promises to update an existing provider playlist.
+- R8. Export requests provider authorization only after A2 chooses a destination, and export failure never blocks the Thread or its individual song handoffs.
+- R9. Staging exposes Apple Music export after MusicKit proof and Spotify export only to its allowlisted cohort; production exposes each provider only after its own operational and policy gates clear.
 
-**Phase 3 — provider export**
+**Later roadmap**
 
-- R9. A listener may explicitly authorize a supported provider to save a completed thread as a native playlist.
-- R10. Export is optional, happens after the core thread is complete, and does not alter the account-free invitation or listener redirect flows.
-
-**Phase 4 and later — public threads and music intelligence**
-
-- R11. Public publishing, joinability, and permissioning remain opt-in capabilities built on a durable ownership and moderation model.
-- R12. Any embedding-based characterization uses a reliable, provider-independent music signal, is described as an interpretive reading, and earns its place by matching human judgments better than the declared-signal baseline.
-
-**Cross-phase accessibility**
-
-- R13. Creation, contribution, management, and listening remain keyboard- and touch-operable at narrow mobile widths; role order and state are conveyed in text and screen-reader semantics; character never relies only on color, artwork, or motion.
+- R10. Characterization, publishing, discovery, and music intelligence remain separable from the MVP's account-free collaboration and listening paths.
 
 ### Key Flows
 
-- F1. **Pass a thread along**
-  - **Trigger:** A1 starts a prompt-led pass-the-aux round in an existing small group chat.
-  - **Steps:** A1 starts a thread, saves the separate management link, and shares the invite. A2 fills one open musical position; acceptance names the filled role, shows what remains, and makes passing the canonical invite onward the primary next action without requiring a recipient identity.
-  - **Outcome:** The group creates an ordered, cross-provider mix rather than an unstructured link dump.
-  - **Covered by:** R1-R6.
-- F2. **Listen across providers**
-  - **Trigger:** A3 opens a completed thread.
-  - **Steps:** A3 views the ordered finished index, selects one song, and listen.cx hands off to their preferred provider. Returning for the next song is explicit; automatic continuation is not promised.
-  - **Outcome:** The social object remains individually playable regardless of provider, while provider-managed continuous sequence playback stays deferred to export.
-  - **Covered by:** R4, R6.
-- F3. **Export a completed mix**
-  - **Trigger:** A3 wants the finished sequence in their own provider library.
-  - **Steps:** A3 explicitly connects a supported provider and requests export.
-  - **Outcome:** A3 gets a native playlist without imposing authentication on the group’s core loop.
-  - **Covered by:** R9-R10.
+```mermaid
+flowchart TB
+  A["Creator starts an unlisted Thread"] --> B["Share link reaches the group"]
+  B --> C["Participant adds a Spotify or Apple Music song"]
+  C --> D["Song joins the chronological Thread"]
+  D --> E["Open one song in the receiver's provider"]
+  D --> F["Copy the current Thread to a provider"]
+  F --> G["Authorize only the destination provider"]
+  G --> H["Create an independent playlist snapshot"]
+  D --> C
+```
+
+- F1. **Build a Thread**
+  - **Trigger:** A1 wants a group to assemble a playlist across provider boundaries.
+  - **Actors:** A1, A2.
+  - **Steps:** A1 starts and shares a Thread. Any A2 with the link adds one or more provider track links, which appear in acceptance order.
+  - **Outcome:** The group has one portable chronological list rather than provider-specific fragments.
+  - **Covered by:** R1-R5.
+- F2. **Open an individual song**
+  - **Trigger:** A2 wants one contribution now.
+  - **Actors:** A2.
+  - **Steps:** A2 either opens the song through the existing receiver-side provider handoff or copies its canonical listen.cx URL.
+  - **Outcome:** Every contribution remains independently playable and shareable without export or authorization.
+  - **Covered by:** R3, R8.
+- F3. **Copy the current Thread**
+  - **Trigger:** A2 wants provider-native playlist playback.
+  - **Actors:** A2.
+  - **Steps:** A2 chooses Apple Music or Spotify, reviews current coverage, authorizes that provider, and creates a playlist from the current ordered snapshot.
+  - **Outcome:** A2 owns a native playlist copy while the source Thread may continue changing independently.
+  - **Covered by:** R6-R9.
 
 ### Acceptance Examples
 
-- AE1. **A contribution completes a real slot**
-  - **Covers:** R2-R4.
-  - **Given:** A thread has an unfilled Peak position.
-  - **When:** A2 contributes an Apple Music track.
-  - **Then:** The position displays the resolved song and a Spotify listener can open its counterpart through their saved preference.
-- AE2. **Thread visuals reflect group input**
-  - **Covers:** R7-R8.
-  - **Given:** A completed thread has a prompt, five distinct roles, and contributor-selected mood cues.
-  - **When:** Its thread page is rendered.
-  - **Then:** Its visual identity reflects those inputs without presenting an automated mood classification as fact.
-- AE3. **Export does not gate listening**
-  - **Covers:** R9-R10.
-  - **Given:** A listener has not authorized either provider.
-  - **When:** They open a completed thread.
-  - **Then:** They can still open individual songs in their saved provider; authorization is only requested after they choose Export.
+- AE1. **One participant adds repeatedly**
+  - **Covers:** R2-R3.
+  - **Given:** An open Thread already contains songs from several people.
+  - **When:** The same participant adds two more valid track links.
+  - **Then:** Both contributions resolve and appear in acceptance order without a one-song-per-browser restriction.
+- AE2. **A snapshot stays a snapshot**
+  - **Covers:** R6-R8.
+  - **Given:** An open Thread contains four songs.
+  - **When:** A participant exports it and another participant later adds a fifth song.
+  - **Then:** The Thread shows five songs while the earlier provider playlist remains the four-song copy it created.
+- AE3. **Listening does not depend on export**
+  - **Covers:** R3, R8.
+  - **Given:** A participant has never authorized a provider for export.
+  - **When:** They open any song from the Thread.
+  - **Then:** The existing preference and direct-handoff flow remains available.
+- AE4. **The creator stops contribution**
+  - **Covers:** R4.
+  - **Given:** The creator has the private management capability.
+  - **When:** They remove an unsuitable contribution and close the Thread.
+  - **Then:** Invite holders cannot add more songs, while remaining songs and snapshot export stay available.
 
 ### Success Criteria
 
-- A meaningful share of started threads receive a second contributor and reach completion.
-- The first gate is second-distinct-contributor rate; among recruited threads, completion and role-abandonment determine whether the five-role template survives.
-- At least one completed thread containing tracks originating from one provider records successful playback through the opposite provider, proving actual portability rather than aggregate provider mix.
-- Character increases completed-thread sharing against `declared-v1` control while seven-day completion and 24-hour contribution depth remain inside their preregistered non-inferiority margins. Improving contribution is welcome but is not required for the completed-artifact treatment to earn its place.
-- Native playlist export is a retained-use action, not a prerequisite for contribution or playback.
+**Thread Core gate**
+
+- Among the first 10 seeded dogfood Threads, at least five receive a second-browser contribution without facilitator help.
+- At least 80% of observed participants complete create-to-share or open-to-add without instruction.
+- A staging Thread preserves chronological order across concurrent and repeat contribution, exposes Open and Copy song link per row, and exercises handoff to both receiver providers.
+
+**Snapshot Export gate**
+
+- Apple Music and an allowlisted Spotify tester each create a correctly ordered playlist snapshot from the current Thread.
+- Each adapter passes the mixed-origin coverage and correctness gate in the export plan before it is considered staging-ready.
+- Thread creation, repeat contribution, individual song actions, and failed export complete without listen.cx account creation or persistent provider identity.
+
+Dogfood instrumentation measures Thread creation, first and second contribution, repeat contribution, export start, and export outcome without storing raw provider links, capability values, or cross-Thread identity.
 
 ### Scope Boundaries
 
 **Deferred for later**
 
-- Native-provider playlist export and connected-provider accounts.
-- Public profiles, follow graphs, public discovery, joinability, moderation, and granular permissions.
-- Embedding-based thread characterization, similarity, prompts, and recommendation.
-- Synchronized playback, comments, reactions, voting, points, and leaderboards.
+- Contributor names, attribution, reactions, comments, voting, notifications, public profiles, discovery, and granular permissions.
+- Declared or inferred Thread character, embedding-based analysis, prompts, recommendations, and visual effects.
+- Reopening a closed Thread, creator recovery after losing the management capability, invite revocation, and durable identity.
 
-**Outside this product's identity**
+**Outside this MVP**
 
-- In-app music playback.
-- Making account creation a condition of listening or contributing.
-- Treating an automated music characterization as authoritative taste judgment.
+- Fixed musical roles, one-contribution-per-browser rules, points, leaderboards, or completion rituals.
+- Continuous playlist synchronization, updating an existing exported playlist, background provider writes, or long-lived connected-provider accounts.
+- In-app or synchronized playback and making authentication a condition of contribution or listening.
 
 ### Dependencies and Assumptions
 
-- The current per-track resolver remains the provider-neutral unit used by a thread.
-- Native handoff from a listen.cx link to installed Apple Music and Spotify apps must be validated on iOS and macOS.
-- Provider export requires product and authorization decisions that differ from the credential-free resolver.
-- A future music embedding source must have dependable catalog coverage and a clear permission basis.
+- The current per-song resolver and receiver-side provider preference remain the provider-neutral foundation.
+- Native Apple Music and Spotify handoff must pass the staging iOS/macOS device matrix.
+- Apple Music export requires a Music User Token and real MusicKit browser verification.
+- Spotify playlist creation requires OAuth. Development mode is limited to five allowlisted users, and public rollout remains gated on quota and policy clearance.
+- The exact initial Thread song cap and rate limits are planning decisions constrained by dogfood cost and abuse risk. The MVP has no automatic contribution or view expiry; the creator closes contribution and Threads remain viewable.
 
-### Outstanding Questions
+### Sources and Research
 
-**Resolved in this plan set**
-
-- The initial moment is an asynchronous ritual in an existing small group chat.
-- The first dogfood template has five roles: Opener, Build, Peak, Curveball, and Closer. This is a measurable product hypothesis, not a universal optimum.
-- Provider previews and open audio models do not currently provide a lawful, dependable music-intelligence path. A licensed enrichment vendor is the only research avenue left open.
-
-**First questions to resolve with staging evidence, in order**
-
-1. Do prompt-led rounds in real group chats receive a second distinct contributor? If not, rework the trigger and invitation before judging the five-role format.
-2. Among threads that recruit a second contributor, do five roles finish and do contributors report that Opener/Build/Peak/Curveball/Closer made choosing a song easier? If recruitment is healthy but completion or comprehension stalls, test a shorter template; compare neutral numbered positions before treating named roles as the successful mechanism.
-3. Does the ordered index feel like a worthwhile finished artifact before export? If contribution is healthy but repeat listening is weak, treat provider-managed sequence playback as an untested payoff rather than rejecting the social loop.
+- Existing product and route contract: `AGENTS.md`, `src/app.ts`, `src/db.ts`, and `src/resolve.ts`.
+- Thread and export detail: `docs/plans/2026-07-13-002-feat-private-pass-the-aux-threads-plan.md` and `docs/plans/2026-07-13-004-feat-provider-playlist-export-plan.md`.
+- Spotify playlist creation and addition: <https://developer.spotify.com/documentation/web-api/reference/create-playlist> and <https://developer.spotify.com/documentation/web-api/reference/add-items-to-playlist>.
+- Spotify quota and policy gates: <https://developer.spotify.com/documentation/web-api/concepts/quota-modes> and <https://developer.spotify.com/policy>.
+- Apple Music playlist creation and user authorization: <https://developer.apple.com/documentation/applemusicapi/create-a-new-library-playlist> and <https://developer.apple.com/documentation/applemusicapi/user-authentication-for-musickit>.
