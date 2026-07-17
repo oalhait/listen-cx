@@ -136,7 +136,7 @@ describe("D1ThreadStore", () => {
     if (accepted.status === "accepted" && duplicate.status === "existing") {
       expect(duplicate.contribution.id).toBe(accepted.contribution.id);
     }
-    expect((await store.getActive(created.thread.publicCapability))?.contributions).toHaveLength(1);
+    expect((await store.getView(created.thread.publicCapability))?.contributions).toHaveLength(1);
   });
 
   it("returns an existing contribution when its Thread later becomes full", async () => {
@@ -174,7 +174,7 @@ describe("D1ThreadStore", () => {
 
     expect(results.every((result) => result.status === "accepted")).toBe(true);
     expect(
-      (await store.getActive(created.thread.publicCapability))?.contributions.map(
+      (await store.getView(created.thread.publicCapability))?.contributions.map(
         (contribution) => contribution.position,
       ),
     ).toEqual([1, 2]);
@@ -215,7 +215,7 @@ describe("D1ThreadStore", () => {
       });
     }
     expect(second.contribution.position).toBe(2);
-    expect((await store.getActive(created.thread.publicCapability))?.contributions).toEqual([
+    expect((await store.getView(created.thread.publicCapability))?.contributions).toEqual([
       expect.objectContaining({ id: second.contribution.id, position: 2 }),
     ]);
   });
@@ -239,7 +239,7 @@ describe("D1ThreadStore", () => {
 
     expect(results.filter((result) => result.status === "accepted")).toHaveLength(1);
     expect(results.filter((result) => result.status === "full")).toHaveLength(1);
-    expect((await store.getActive(created.thread.publicCapability))?.contributions).toHaveLength(50);
+    expect((await store.getView(created.thread.publicCapability))?.contributions).toHaveLength(50);
   });
 
   it("frees active capacity after removal without reusing a position", async () => {
@@ -268,7 +268,7 @@ describe("D1ThreadStore", () => {
     );
 
     expect(replacement).toMatchObject({ status: "accepted", contribution: { position: 51 } });
-    expect((await store.getActive(created.thread.publicCapability))?.contributions).toHaveLength(50);
+    expect((await store.getView(created.thread.publicCapability))?.contributions).toHaveLength(50);
   });
 
   it("linearizes a full-capacity add against removal without an indeterminate error", async () => {
@@ -299,7 +299,7 @@ describe("D1ThreadStore", () => {
 
     expect(removal.status).toBe("removed");
     expect(["accepted", "full"]).toContain(acceptance.status);
-    expect((await store.getActive(created.thread.publicCapability))?.contributions).toHaveLength(
+    expect((await store.getView(created.thread.publicCapability))?.contributions).toHaveLength(
       acceptance.status === "accepted" ? 50 : 49,
     );
   });
@@ -324,7 +324,7 @@ describe("D1ThreadStore", () => {
 
     expect(closure.status).toBe("closed");
     expect(["accepted", "closed"]).toContain(acceptance.status);
-    const active = await store.getActive(created.thread.publicCapability);
+    const active = await store.getView(created.thread.publicCapability);
     expect(active?.thread.closedAt).not.toBeNull();
     expect(active?.contributions).toHaveLength(acceptance.status === "accepted" ? 1 : 0);
 
@@ -359,7 +359,7 @@ describe("D1ThreadStore", () => {
 
     expect(removed.status).toBe("removed");
     expect(addAfterRemoval).toEqual({ status: "closed" });
-    const active = await store.getActive(created.thread.publicCapability);
+    const active = await store.getView(created.thread.publicCapability);
     expect(active?.thread.closedAt).not.toBeNull();
     expect(active?.contributions).toHaveLength(0);
   });

@@ -1,6 +1,6 @@
 import type { LinkRow } from "./db.js";
 
-function esc(value: string): string {
+export function esc(value: string): string {
   return value.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`);
 }
 

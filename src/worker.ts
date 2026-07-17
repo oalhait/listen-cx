@@ -23,6 +23,19 @@ export interface ThreadLimiters {
   contribution: AttemptLimiter;
 }
 
+type WorkerApp = ReturnType<typeof createApp>;
+
+let appCache:
+  | {
+      baseUrl: string;
+      db: D1Database;
+      creationLimiter: RateLimit;
+      contributionLimiter: RateLimit;
+      maximumThreads: number;
+      app: WorkerApp;
+    }
+  | undefined;
+
 export function createThreadLimiters(env: ThreadLimiterBindings): ThreadLimiters {
   return {
     creation: createCloudflareAttemptLimiter(
@@ -45,17 +58,39 @@ export function getThreadMaximum(env: ThreadConfigurationBindings): number {
   return env.THREAD_MAX_THREADS;
 }
 
+export function getWorkerApp(env: Env, requestUrl: string): WorkerApp {
+  const baseUrl = (env.BASE_URL || new URL(requestUrl).origin).replace(/\/$/, "");
+  const maximumThreads = getThreadMaximum(env);
+  if (
+    appCache?.baseUrl === baseUrl &&
+    appCache.db === env.DB &&
+    appCache.creationLimiter === env.THREAD_CREATE_RATE_LIMITER &&
+    appCache.contributionLimiter === env.THREAD_CONTRIBUTION_RATE_LIMITER &&
+    appCache.maximumThreads === maximumThreads
+  ) {
+    return appCache.app;
+  }
+
+  const app = createApp({
+    resolver: new Resolver(new SpotifyClient(), new ItunesClient()),
+    store: new D1LinkStore(env.DB),
+    threadStore: new D1ThreadStore(env.DB, { maxThreads: maximumThreads }),
+    threadLimiters: createThreadLimiters(env),
+    baseUrl,
+  });
+  appCache = {
+    baseUrl,
+    db: env.DB,
+    creationLimiter: env.THREAD_CREATE_RATE_LIMITER,
+    contributionLimiter: env.THREAD_CONTRIBUTION_RATE_LIMITER,
+    maximumThreads,
+    app,
+  };
+  return app;
+}
+
 export default {
   fetch(request, env) {
-    const baseUrl = env.BASE_URL || new URL(request.url).origin;
-    const maximumThreads = getThreadMaximum(env);
-    const app = createApp({
-      resolver: new Resolver(new SpotifyClient(), new ItunesClient()),
-      store: new D1LinkStore(env.DB),
-      threadStore: new D1ThreadStore(env.DB, { maxThreads: maximumThreads }),
-      threadLimiters: createThreadLimiters(env),
-      baseUrl: baseUrl.replace(/\/$/, ""),
-    });
-    return app.fetch(request);
+    return getWorkerApp(env, request.url).fetch(request);
   },
 } satisfies ExportedHandler<Env>;

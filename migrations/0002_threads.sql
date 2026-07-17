@@ -25,6 +25,3 @@ CREATE TABLE thread_contributions (
 
 CREATE INDEX idx_thread_contributions_active
   ON thread_contributions(thread_id, position) WHERE removed_at IS NULL;
-
-CREATE INDEX idx_thread_contributions_link_slug
-  ON thread_contributions(link_slug);

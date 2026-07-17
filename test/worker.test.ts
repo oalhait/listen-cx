@@ -1,6 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
-import { createThreadLimiters, getThreadMaximum } from "../src/worker.js";
+import { createThreadLimiters, getThreadMaximum, getWorkerApp } from "../src/worker.js";
 
 describe("worker", () => {
   beforeEach(async () => {
@@ -23,6 +23,13 @@ describe("worker", () => {
       creation: { check: expect.any(Function) },
       contribution: { check: expect.any(Function) },
     });
+  });
+
+  it("reuses the assembled app for the same immutable Worker configuration", () => {
+    const first = getWorkerApp(env, "https://staging.listen.cx/healthz");
+    const second = getWorkerApp(env, "https://another-origin.example/healthz");
+
+    expect(second).toBe(first);
   });
 
   it("wires the configured Thread store and limiter dependencies into the entrypoint", async () => {

@@ -1,3 +1,9 @@
+import {
+  MANAGEMENT_ACTION_HEADER,
+  MANAGEMENT_ACTION_VALUE,
+} from "./thread-security.js";
+import { esc } from "./page.js";
+
 export type ThreadState = "open" | "full" | "closed";
 export type ThreadStatusTone = "info" | "success" | "error";
 
@@ -36,10 +42,6 @@ export interface ThreadPageModel {
   songs: readonly ThreadSongView[];
   addValue?: string;
   status?: ThreadStatusView;
-}
-
-function esc(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`);
 }
 
 function safeUrl(value: string): string {
@@ -113,6 +115,14 @@ const STYLES = `
   @media (prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; transition-duration:.01ms!important; animation-duration:.01ms!important; animation-iteration-count:1!important; } }
 `;
 
+const COPY_HELPERS = `
+function setStatus(message,tone="info"){pageStatus.textContent=message;pageStatus.dataset.tone=tone;}
+function reportCopy(copied,successMessage,failureMessage){setStatus(copied?successMessage:failureMessage,copied?"success":"error");}
+async function copyText(value){
+  if(navigator.clipboard){const copied=await navigator.clipboard.writeText(value).then(()=>true,()=>false);if(copied)return true;}
+  const area=document.createElement("textarea");area.value=value;area.setAttribute("readonly","");area.style.position="fixed";area.style.opacity="0";document.body.append(area);area.select();const copied=document.execCommand("copy");area.remove();return copied;
+}`;
+
 function documentHead(title: string, description: string, artworkUrl?: string | null): string {
   const artwork = artworkUrl ? safeUrl(artworkUrl) : null;
   return `<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -163,12 +173,7 @@ const pageStatus=document.getElementById("page-status");
 const createSubmit=document.getElementById("create-thread-submit");
 let createdPublicUrl="";
 let privateManagementUrl="";
-function setStatus(message,tone="info"){pageStatus.textContent=message;pageStatus.dataset.tone=tone;}
-function reportCopy(copied,successMessage,failureMessage){setStatus(copied?successMessage:failureMessage,copied?"success":"error");}
-async function copyText(value){
-  if(navigator.clipboard){const copied=await navigator.clipboard.writeText(value).then(()=>true,()=>false);if(copied)return true;}
-  const area=document.createElement("textarea");area.value=value;area.setAttribute("readonly","");area.style.position="fixed";area.style.opacity="0";document.body.append(area);area.select();const copied=document.execCommand("copy");area.remove();return copied;
-}
+${COPY_HELPERS}
 function showCreated(data){
   createdPublicUrl=typeof data.publicUrl==="string"?data.publicUrl:"";
   privateManagementUrl=typeof data.managementUrl==="string"?data.managementUrl:"";
@@ -252,12 +257,8 @@ export function threadPage(model: ThreadPageModel): string {
 <script>
 const pageStatus=document.getElementById("page-status");
 const activationAction=document.body.dataset.activationAction||"";
-function setStatus(message,tone="info"){pageStatus.textContent=message;pageStatus.dataset.tone=tone;}
-function reportCopy(copied,successMessage,failureMessage){setStatus(copied?successMessage:failureMessage,copied?"success":"error");}
-async function copyText(value){
-  if(navigator.clipboard){const copied=await navigator.clipboard.writeText(value).then(()=>true,()=>false);if(copied)return true;}
-  const area=document.createElement("textarea");area.value=value;area.setAttribute("readonly","");area.style.position="fixed";area.style.opacity="0";document.body.append(area);area.select();const copied=document.execCommand("copy");area.remove();return copied;
-}
+const managementHeaders={"${MANAGEMENT_ACTION_HEADER}":"${MANAGEMENT_ACTION_VALUE}"};
+${COPY_HELPERS}
 async function activateManagement(){
   if(!location.hash.startsWith("#manage="))return;
   const cleanUrl=location.pathname+location.search;
@@ -265,7 +266,7 @@ async function activateManagement(){
   try{token=decodeURIComponent(location.hash.slice("#manage=".length));}
   catch{history.replaceState(null,"",cleanUrl);setStatus("That private management link is invalid or no longer available.","error");return;}
   let response;
-  try{response=await fetch(activationAction,{method:"POST",headers:{"Content-Type":"application/json","x-listen-management-action":"1"},body:JSON.stringify({token})});}
+  try{response=await fetch(activationAction,{method:"POST",headers:{"Content-Type":"application/json",...managementHeaders},body:JSON.stringify({token})});}
   catch{history.replaceState(null,"",cleanUrl);setStatus("That private management link could not be checked. Try opening it again.","error");return;}
   history.replaceState(null,"",cleanUrl);
   if(response.ok){location.reload();return;}
@@ -286,9 +287,9 @@ if(addForm){
     finally{submit.disabled=false;submit.textContent="Add song";}
   });
 }
-for(const button of document.querySelectorAll("[data-remove-action]")){button.addEventListener("click",async()=>{button.disabled=true;try{const response=await fetch(button.dataset.removeAction||"",{method:"POST",headers:{"x-listen-management-action":"1"}});if(response.ok){location.reload();return;}const data=await response.json().catch(()=>({}));setStatus(typeof data.error==="string"?data.error:"Couldn’t remove that song.","error");}catch{setStatus("Couldn’t remove that song. Try again.","error");}finally{button.disabled=false;}});}
+for(const button of document.querySelectorAll("[data-remove-action]")){button.addEventListener("click",async()=>{button.disabled=true;try{const response=await fetch(button.dataset.removeAction||"",{method:"POST",headers:managementHeaders});if(response.ok){location.reload();return;}const data=await response.json().catch(()=>({}));setStatus(typeof data.error==="string"?data.error:"Couldn’t remove that song.","error");}catch{setStatus("Couldn’t remove that song. Try again.","error");}finally{button.disabled=false;}});}
 const closeButton=document.querySelector("[data-close-action]");
-if(closeButton){closeButton.addEventListener("click",async()=>{if(!confirm("Close contributions permanently? This Thread cannot be reopened."))return;closeButton.disabled=true;try{const response=await fetch(closeButton.dataset.closeAction||"",{method:"POST",headers:{"x-listen-management-action":"1"}});if(response.ok){location.reload();return;}const data=await response.json().catch(()=>({}));setStatus(typeof data.error==="string"?data.error:"Couldn’t close this Thread.","error");}catch{setStatus("Couldn’t close this Thread. Try again.","error");}finally{closeButton.disabled=false;}});}
+if(closeButton){closeButton.addEventListener("click",async()=>{if(!confirm("Close contributions permanently? This Thread cannot be reopened."))return;closeButton.disabled=true;try{const response=await fetch(closeButton.dataset.closeAction||"",{method:"POST",headers:managementHeaders});if(response.ok){location.reload();return;}const data=await response.json().catch(()=>({}));setStatus(typeof data.error==="string"?data.error:"Couldn’t close this Thread.","error");}catch{setStatus("Couldn’t close this Thread. Try again.","error");}finally{closeButton.disabled=false;}});}
 activateManagement();
 </script></body></html>`;
 }

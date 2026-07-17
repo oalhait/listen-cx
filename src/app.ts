@@ -6,10 +6,11 @@ import { choicePage, handoffPage, homePage, sharePage } from "./page.js";
 import {
   THREAD_ACTIVE_CONTRIBUTION_LIMIT,
   fingerprintContributionInput,
+  isThreadCapability,
   normalizeRequestKey,
   normalizeThreadTitle,
 } from "./thread.js";
-import type { D1ThreadStore, ThreadView } from "./thread-db.js";
+import type { D1ThreadStore, ThreadPageView } from "./thread-db.js";
 import { threadCreationPage, threadPage, type ThreadPageModel } from "./thread-page.js";
 import {
   authorizeManagementCapability,
@@ -27,7 +28,6 @@ import { appleSearchUrl, parseTrackUrl, spotifySearchUrl } from "./urls.js";
 const PREF_COOKIE = "pref";
 const ONE_YEAR = 60 * 60 * 24 * 365;
 const MAX_CREATE_BODY_BYTES = 4096;
-const THREAD_CAPABILITY = /^[A-Za-z0-9_-]{22}$/;
 const BOT_UA =
   /bot|crawler|spider|facebookexternalhit|twitterbot|slackbot|discordbot|whatsapp|telegram|linkedinbot|applebot|imessage|preview/i;
 
@@ -71,7 +71,7 @@ function providerTarget(
 }
 
 export interface AppDeps {
-  resolver: Resolver;
+  resolver: Pick<Resolver, "resolve">;
   store: LinkStore;
   threadStore: D1ThreadStore;
   threadLimiters: {
@@ -166,32 +166,26 @@ export function createApp({
       publicCapability,
       capability,
     );
-    if (!authorization && THREAD_CAPABILITY.test(publicCapability)) {
+    if (!authorization && isThreadCapability(publicCapability)) {
       clearManagementCookie(context, publicCapability);
     }
     return authorization;
   }
 
   async function threadModel(
-    view: ThreadView,
+    view: ThreadPageView,
     managed: boolean,
   ): Promise<ThreadPageModel> {
-    const songs = await Promise.all(
-      view.contributions.map(async (contribution) => {
-        const link = await store.get(contribution.linkSlug);
-        if (!link) throw new Error("Thread contribution link is missing");
-        return {
-          contributionId: String(contribution.id),
-          title: link.title,
-          artist: link.artist,
-          artworkUrl: link.artwork_url,
-          canonicalUrl: `${baseUrl}/${link.slug}`,
-          removeAction: managed
-            ? `/t/${view.thread.publicCapability}/manage/contributions/${contribution.id}/remove`
-            : undefined,
-        };
-      }),
-    );
+    const songs = view.contributions.map((contribution) => ({
+      contributionId: String(contribution.id),
+      title: contribution.title,
+      artist: contribution.artist,
+      artworkUrl: contribution.artworkUrl,
+      canonicalUrl: `${baseUrl}/${contribution.linkSlug}`,
+      removeAction: managed
+        ? `/t/${view.thread.publicCapability}/manage/contributions/${contribution.id}/remove`
+        : undefined,
+    }));
     const state = view.thread.closedAt
       ? "closed"
       : view.contributions.length >= THREAD_ACTIVE_CONTRIBUTION_LIMIT
@@ -255,14 +249,13 @@ export function createApp({
     if (!resolved) {
       return c.json({ error: "That doesn't look like a Spotify or Apple Music track link." }, 422);
     }
-    const row = resolved;
     return c.json({
-      link: `${baseUrl}/${row.slug}`,
-      slug: row.slug,
-      title: row.title,
-      artist: row.artist,
-      artworkUrl: row.artwork_url,
-      complete: row.complete === 1,
+      link: `${baseUrl}/${resolved.slug}`,
+      slug: resolved.slug,
+      title: resolved.title,
+      artist: resolved.artist,
+      artworkUrl: resolved.artwork_url,
+      complete: resolved.complete === 1,
     });
   });
 
@@ -323,7 +316,7 @@ export function createApp({
 
   app.get("/t/:slug", async (c) => {
     const publicCapability = c.req.param("slug");
-    const view = await threadStore.getActive(publicCapability);
+    const view = await threadStore.getPageView(publicCapability);
     if (!view) return c.text("Link not found.", 404);
     applyThreadHeaders(c);
 
@@ -376,8 +369,7 @@ export function createApp({
     );
     if (!decision.allowed) return rateLimited(c, decision.retryAfterSeconds);
 
-    const initialView = await threadStore.getActive(publicCapability);
-    if (!initialView) {
+    if (!(await threadStore.exists(publicCapability))) {
       return c.json({ code: "not_found", error: "Thread not found." }, 404);
     }
 
@@ -412,25 +404,23 @@ export function createApp({
       inputFingerprint: await fingerprintContributionInput(identity),
     });
 
-    if (result.status === "accepted") {
-      return c.json({ status: "accepted", contributionId: result.contribution.id }, 201);
+    switch (result.status) {
+      case "accepted":
+        return c.json({ status: "accepted", contributionId: result.contribution.id }, 201);
+      case "existing":
+        return c.json({ status: "existing", contributionId: result.contribution.id });
+      case "conflict":
+        return c.json(
+          { code: "conflict", error: "That request key was already used for another song." },
+          409,
+        );
+      case "full":
+        return c.json({ code: "full", error: "This Thread is full." }, 409);
+      case "closed":
+        return c.json({ code: "closed", error: "Contributions are closed." }, 409);
+      case "not_found":
+        return c.json({ code: "not_found", error: "Thread not found." }, 404);
     }
-    if (result.status === "existing") {
-      return c.json({ status: "existing", contributionId: result.contribution.id });
-    }
-    if (result.status === "conflict") {
-      return c.json(
-        { code: "conflict", error: "That request key was already used for another song." },
-        409,
-      );
-    }
-    if (result.status === "full") {
-      return c.json({ code: "full", error: "This Thread is full." }, 409);
-    }
-    if (result.status === "closed") {
-      return c.json({ code: "closed", error: "Contributions are closed." }, 409);
-    }
-    return c.json({ code: "not_found", error: "Thread not found." }, 404);
   });
 
   app.post("/t/:slug/manage/activate", async (c) => {
@@ -454,7 +444,7 @@ export function createApp({
       parsedBody.value.token,
     );
     if (!authorization) {
-      if (THREAD_CAPABILITY.test(publicCapability)) {
+      if (isThreadCapability(publicCapability)) {
         clearManagementCookie(c, publicCapability);
       }
       return c.json({ code: "unauthorized", error: "Private link is invalid." }, 401);

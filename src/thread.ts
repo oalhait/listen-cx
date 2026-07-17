@@ -3,8 +3,9 @@ export const THREAD_REQUEST_KEY_MAX_LENGTH = 128;
 export const THREAD_ACTIVE_CONTRIBUTION_LIMIT = 50;
 
 const CONTROL_CHARACTER = /\p{Cc}/u;
+const THREAD_CAPABILITY = /^[A-Za-z0-9_-]{22}$/;
 
-export type SourceProvider = "spotify" | "apple";
+export type SourceProvider = Provider;
 
 export interface ContributionIdentity {
   linkSlug: string;
@@ -19,6 +20,10 @@ export interface ThreadCapabilities {
   publicCapability: string;
   managementCapability: string;
   managementDigest: string;
+}
+
+export function isThreadCapability(value: string): boolean {
+  return THREAD_CAPABILITY.test(value);
 }
 
 export function normalizeThreadTitle(input: string): string {
@@ -44,13 +49,13 @@ export async function createThreadCapabilities(): Promise<ThreadCapabilities> {
 }
 
 export async function digestManagementCapability(capability: string): Promise<string> {
-  return sha256(capability);
+  return sha256Hex(capability);
 }
 
 export async function fingerprintContributionInput(
   identity: ContributionSourceIdentity,
 ): Promise<string> {
-  return sha256(
+  return sha256Hex(
     JSON.stringify([
       identity.sourceProvider,
       identity.sourceCatalogId,
@@ -72,15 +77,15 @@ function normalizeBoundedText(input: string, label: string, maximum: number): st
 }
 
 function randomCapability(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  const binary = String.fromCharCode(...bytes);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+  return nanoid(22);
 }
 
-async function sha256(value: string): Promise<string> {
+export async function sha256Hex(value: string): Promise<string> {
   const bytes = new TextEncoder().encode(value);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(digest)]
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
 }
+import { nanoid } from "nanoid";
+import type { Provider } from "./urls.js";

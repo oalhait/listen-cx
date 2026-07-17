@@ -203,7 +203,7 @@ describe("threadPage", () => {
       }),
     );
 
-    expect(html.match(/"x-listen-management-action":"1"/g)).toHaveLength(3);
+    expect(html.match(/"x-listen-management-action":"1"/g)).toHaveLength(1);
     expect(html).not.toContain('"X-Listen-Action":"remove-song"');
     expect(html).not.toContain('"X-Listen-Action":"close-thread"');
   });

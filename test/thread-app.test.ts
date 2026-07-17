@@ -44,12 +44,12 @@ function makeApp(options: AppOptions = {}) {
     ? fixedAttemptLimiter({ allowed: false, retryAfterSeconds: 60 })
     : allowAllAttemptLimiter();
   const app = createApp({
-    resolver: { resolve } as never,
+    resolver: { resolve },
     store: linkStore,
     threadStore,
     threadLimiters: { creation, contribution },
     baseUrl: BASE_URL,
-  } as never);
+  });
   return { app, linkStore, threadStore, resolve };
 }
 
@@ -195,7 +195,7 @@ describe("Thread routes", () => {
     expect((await addSong(app, created.publicCapability, "request-1")).status).toBe(201);
     expect((await addSong(app, created.publicCapability, "request-2")).status).toBe(201);
     expect((await addSong(app, created.publicCapability, "request-2")).status).toBe(200);
-    const view = await threadStore.getActive(created.publicCapability);
+    const view = await threadStore.getView(created.publicCapability);
     expect(view?.contributions).toHaveLength(2);
     expect(view?.contributions[0]).toMatchObject({
       sourceProvider: "spotify",
@@ -219,7 +219,7 @@ describe("Thread routes", () => {
 
     expect(retry.status).toBe(200);
     expect(await retry.json()).toMatchObject({ status: "existing" });
-    expect((await threadStore.getActive(created.publicCapability))?.contributions).toHaveLength(1);
+    expect((await threadStore.getView(created.publicCapability))?.contributions).toHaveLength(1);
   });
 
   it("classifies invalid, provider-failed, and conflicting additions without extra membership", async () => {
@@ -236,7 +236,7 @@ describe("Thread routes", () => {
     expect(
       (await addSong(app, created.publicCapability, "same-key", OTHER_TRACK_URL)).status,
     ).toBe(409);
-    expect((await threadStore.getActive(created.publicCapability))?.contributions).toHaveLength(1);
+    expect((await threadStore.getView(created.publicCapability))?.contributions).toHaveLength(1);
   });
 
   it("rejects malformed and oversized contribution bodies before provider resolution", async () => {
@@ -270,7 +270,7 @@ describe("Thread routes", () => {
     const { app, resolve, threadStore } = makeApp();
     const created = await createThread(app);
     expect((await addSong(app, created.publicCapability, "seed-1")).status).toBe(201);
-    const linkSlug = (await threadStore.getActive(created.publicCapability))?.contributions[0]
+    const linkSlug = (await threadStore.getView(created.publicCapability))?.contributions[0]
       ?.linkSlug;
     if (!linkSlug) throw new Error("seed contribution missing");
     const identity = {
@@ -327,7 +327,7 @@ describe("Thread routes", () => {
 
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ code: "closed" });
-    expect((await threadStore.getActive(publicCapability))?.contributions).toHaveLength(0);
+    expect((await threadStore.getView(publicCapability))?.contributions).toHaveLength(0);
   });
 
   it("returns the authoritative full state when capacity fills during resolution", async () => {
@@ -375,7 +375,7 @@ describe("Thread routes", () => {
 
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ code: "full" });
-    expect((await threadStore.getActive(publicCapability))?.contributions).toHaveLength(50);
+    expect((await threadStore.getView(publicCapability))?.contributions).toHaveLength(50);
   });
 
   it("exchanges fragment authority, rejects cross-origin activation, and keeps bots public", async () => {

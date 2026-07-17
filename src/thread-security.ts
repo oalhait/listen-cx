@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { isThreadCapability, sha256Hex } from "./thread.js";
 
-const CAPABILITY = /^[A-Za-z0-9_-]{22}$/;
 const SHA256_HEX = /^[a-f0-9]{64}$/;
 const MANAGEMENT_COOKIE = "manage";
 const ONE_YEAR_SECONDS = 60 * 60 * 24 * 365;
@@ -44,7 +44,7 @@ export async function authorizeManagementCapability(
   publicCapability: string,
   managementCapability: string,
 ): Promise<ManagementAuthorization | null> {
-  if (!CAPABILITY.test(publicCapability) || !CAPABILITY.test(managementCapability)) {
+  if (!isThreadCapability(publicCapability) || !isThreadCapability(managementCapability)) {
     return null;
   }
 
@@ -66,7 +66,7 @@ export async function authorizeManagementCapability(
 }
 
 export function managementCookiePath(publicCapability: string): string {
-  if (!CAPABILITY.test(publicCapability)) {
+  if (!isThreadCapability(publicCapability)) {
     throw new Error("Invalid Thread capability");
   }
   return `/t/${publicCapability}`;
@@ -77,7 +77,7 @@ export function setManagementCookie(
   publicCapability: string,
   managementCapability: string,
 ): void {
-  if (!CAPABILITY.test(managementCapability)) {
+  if (!isThreadCapability(managementCapability)) {
     throw new Error("Invalid management capability");
   }
   setCookie(context, MANAGEMENT_COOKIE, managementCapability, {
@@ -207,11 +207,4 @@ function hexToBytes(value: string): Uint8Array {
     bytes[index / 2] = Number.parseInt(value.slice(index, index + 2), 16);
   }
   return bytes;
-}
-
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
 }
