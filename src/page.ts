@@ -121,6 +121,8 @@ const CREATOR_STYLES = `
   input:focus { border-color:var(--focus); box-shadow:0 0 0 3px rgba(255,152,64,.3); }
   .help { min-height:18px; margin:-2px 0 0; color:var(--muted); font-size:13px; line-height:1.4; }
   .help[data-state="error"] { color:#ffaaa3; }
+  .thread-entry { display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:5px; margin:22px 0 0; color:var(--muted); font-size:13px; }
+  .thread-entry a { min-height:48px; display:inline-flex; align-items:center; color:var(--cream); font-weight:700; text-underline-offset:3px; }
   .primary,.secondary { min-height:52px; border:0; border-radius:4px; padding:0 18px; cursor:pointer; font-weight:700; transition:background 150ms ease,transform 150ms cubic-bezier(.34,1.56,.64,1),opacity 150ms ease; }
   .primary { margin-top:2px; background:var(--orange); color:white; box-shadow:0 6px 20px rgba(255,122,0,.24); }
   .primary:hover { background:var(--orange-dark); }
@@ -161,6 +163,7 @@ export function homePage(_baseUrl: string): string {
       <p id="input-help" class="help" role="status" aria-live="polite">Spotify and Apple Music track links work.</p>
       <button class="primary" id="go" type="submit">Make my link</button>
     </form>
+    <p class="thread-entry">Building a playlist together? <a href="/threads/new">Start a Thread</a></p>
   </section>
   <section class="panel view" id="success-view" hidden>
     <p class="eyebrow">Ready to send</p><h1>Your link is ready</h1>
