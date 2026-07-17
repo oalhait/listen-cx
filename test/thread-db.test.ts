@@ -1,7 +1,8 @@
 import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import { D1ThreadStore } from "../src/thread-db.js";
-import { digestManagementCapability, fingerprintContributionInput } from "../src/thread.js";
+import { authorizeManagementCapability } from "../src/thread-security.js";
+import { fingerprintContributionInput } from "../src/thread.js";
 
 const LINK_SLUG = "song234";
 
@@ -27,6 +28,20 @@ async function contributionInput(requestKey: string, catalogId = requestKey) {
     requestKey,
     inputFingerprint: await fingerprintContributionInput(identity),
   };
+}
+
+async function managementAuthorization(
+  store: D1ThreadStore,
+  publicCapability: string,
+  managementCapability: string,
+) {
+  const authorization = await authorizeManagementCapability(
+    store,
+    publicCapability,
+    managementCapability,
+  );
+  if (!authorization) throw new Error("management authorization failed");
+  return authorization;
 }
 
 describe("D1ThreadStore", () => {
@@ -66,12 +81,13 @@ describe("D1ThreadStore", () => {
     if (result.status !== "created") return;
     expect(result.thread.title).toBe("Friday night");
     expect(result.thread.publicCapability).not.toBe(result.managementCapability);
-    expect(
-      await store.getByManagementDigest(
+    await expect(
+      authorizeManagementCapability(
+        store,
         result.thread.publicCapability,
-        await digestManagementCapability(result.managementCapability),
+        result.managementCapability,
       ),
-    ).toMatchObject({ id: result.thread.id });
+    ).resolves.toMatchObject({ publicCapability: result.thread.publicCapability });
     const persisted = await env.DB.prepare(
       "SELECT management_digest FROM threads WHERE id = ?",
     )
@@ -80,7 +96,11 @@ describe("D1ThreadStore", () => {
     expect(persisted?.management_digest).toMatch(/^[a-f0-9]{64}$/);
     expect(persisted?.management_digest).not.toBe(result.managementCapability);
     expect(
-      await store.getByManagementDigest(result.thread.publicCapability, "wrong-digest"),
+      await authorizeManagementCapability(
+        store,
+        result.thread.publicCapability,
+        "C".repeat(22),
+      ),
     ).toBeNull();
   });
 
@@ -176,16 +196,13 @@ describe("D1ThreadStore", () => {
       throw new Error("contributions not accepted");
     }
 
-    const removed = await store.removeContribution(
+    const authorization = await managementAuthorization(
+      store,
       created.thread.publicCapability,
-      first.contribution.id,
-      await digestManagementCapability(created.managementCapability),
+      created.managementCapability,
     );
-    const removedAgain = await store.removeContribution(
-      created.thread.publicCapability,
-      first.contribution.id,
-      await digestManagementCapability(created.managementCapability),
-    );
+    const removed = await store.removeContribution(authorization, first.contribution.id);
+    const removedAgain = await store.removeContribution(authorization, first.contribution.id);
 
     expect(removed.status).toBe("removed");
     expect(removedAgain.status).toBe("removed");
@@ -238,9 +255,13 @@ describe("D1ThreadStore", () => {
       if (result.status !== "accepted") throw new Error("contribution not accepted");
       if (index === 1) firstContributionId = result.contribution.id;
     }
-    const digest = await digestManagementCapability(created.managementCapability);
+    const authorization = await managementAuthorization(
+      store,
+      created.thread.publicCapability,
+      created.managementCapability,
+    );
 
-    await store.removeContribution(created.thread.publicCapability, firstContributionId, digest);
+    await store.removeContribution(authorization, firstContributionId);
     const replacement = await store.acceptContribution(
       created.thread.publicCapability,
       await contributionInput("replacement"),
@@ -263,17 +284,17 @@ describe("D1ThreadStore", () => {
       if (result.status !== "accepted") throw new Error("contribution not accepted");
       if (index === 1) firstContributionId = result.contribution.id;
     }
-    const digest = await digestManagementCapability(created.managementCapability);
+    const authorization = await managementAuthorization(
+      store,
+      created.thread.publicCapability,
+      created.managementCapability,
+    );
 
     const acceptancePromise = store.acceptContribution(
       created.thread.publicCapability,
       await contributionInput("racing-replacement"),
     );
-    const removalPromise = store.removeContribution(
-      created.thread.publicCapability,
-      firstContributionId,
-      digest,
-    );
+    const removalPromise = store.removeContribution(authorization, firstContributionId);
     const [acceptance, removal] = await Promise.all([acceptancePromise, removalPromise]);
 
     expect(removal.status).toBe("removed");
@@ -287,14 +308,18 @@ describe("D1ThreadStore", () => {
     const store = new D1ThreadStore(env.DB, { maxThreads: 10 });
     const created = await store.create("Close race");
     if (created.status !== "created") throw new Error("thread not created");
-    const digest = await digestManagementCapability(created.managementCapability);
+    const authorization = await managementAuthorization(
+      store,
+      created.thread.publicCapability,
+      created.managementCapability,
+    );
 
     const [acceptance, closure] = await Promise.all([
       store.acceptContribution(
         created.thread.publicCapability,
         await contributionInput("racing-add"),
       ),
-      store.close(created.thread.publicCapability, digest),
+      store.close(authorization),
     ]);
 
     expect(closure.status).toBe("closed");
@@ -303,7 +328,7 @@ describe("D1ThreadStore", () => {
     expect(active?.thread.closedAt).not.toBeNull();
     expect(active?.contributions).toHaveLength(acceptance.status === "accepted" ? 1 : 0);
 
-    const closedAgain = await store.close(created.thread.publicCapability, digest);
+    const closedAgain = await store.close(authorization);
     expect(closedAgain).toMatchObject({
       status: "closed",
       thread: { closedAt: closure.status === "closed" ? closure.thread.closedAt : null },
@@ -319,14 +344,14 @@ describe("D1ThreadStore", () => {
       await contributionInput("before-close"),
     );
     if (accepted.status !== "accepted") throw new Error("contribution not accepted");
-    const digest = await digestManagementCapability(created.managementCapability);
-
-    await store.close(created.thread.publicCapability, digest);
-    const removed = await store.removeContribution(
+    const authorization = await managementAuthorization(
+      store,
       created.thread.publicCapability,
-      accepted.contribution.id,
-      digest,
+      created.managementCapability,
     );
+
+    await store.close(authorization);
+    const removed = await store.removeContribution(authorization, accepted.contribution.id);
     const addAfterRemoval = await store.acceptContribution(
       created.thread.publicCapability,
       await contributionInput("after-close"),

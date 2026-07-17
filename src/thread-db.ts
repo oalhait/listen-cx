@@ -5,6 +5,7 @@ import {
   normalizeThreadTitle,
   type SourceProvider,
 } from "./thread.js";
+import type { ManagementAuthorization } from "./thread-security.js";
 
 interface ThreadRow {
   id: number;
@@ -133,18 +134,12 @@ export class D1ThreadStore {
     };
   }
 
-  async getByManagementDigest(
-    publicCapability: string,
-    managementDigest: string,
-  ): Promise<ThreadRecord | null> {
+  async getManagementDigest(publicCapability: string): Promise<string | null> {
     const row = await this.db
-      .prepare(
-        `SELECT * FROM threads
-         WHERE public_capability = ? AND management_digest = ?`,
-      )
-      .bind(publicCapability, managementDigest)
-      .first<ThreadRow>();
-    return row ? mapThread(row) : null;
+      .prepare("SELECT management_digest FROM threads WHERE public_capability = ?")
+      .bind(publicCapability)
+      .first<{ management_digest: string }>();
+    return row?.management_digest ?? null;
   }
 
   async getActive(publicCapability: string): Promise<ThreadView | null> {
@@ -241,9 +236,8 @@ export class D1ThreadStore {
   }
 
   async removeContribution(
-    publicCapability: string,
+    authorization: ManagementAuthorization,
     contributionId: number,
-    managementDigest: string,
   ): Promise<RemoveContributionResult> {
     const row = await this.db
       .withSession("first-primary")
@@ -252,30 +246,27 @@ export class D1ThreadStore {
          SET removed_at = COALESCE(removed_at, datetime('now'))
          WHERE id = ? AND thread_id = (
            SELECT id FROM threads
-           WHERE public_capability = ? AND management_digest = ?
+           WHERE public_capability = ?
          )
          RETURNING *`,
       )
-      .bind(contributionId, publicCapability, managementDigest)
+      .bind(contributionId, authorization.publicCapability)
       .first<ThreadContributionRow>();
     return row
       ? { status: "removed", contribution: mapContribution(row) }
       : { status: "not_found" };
   }
 
-  async close(
-    publicCapability: string,
-    managementDigest: string,
-  ): Promise<CloseThreadResult> {
+  async close(authorization: ManagementAuthorization): Promise<CloseThreadResult> {
     const row = await this.db
       .withSession("first-primary")
       .prepare(
         `UPDATE threads
          SET closed_at = COALESCE(closed_at, datetime('now'))
-         WHERE public_capability = ? AND management_digest = ?
+         WHERE public_capability = ?
          RETURNING *`,
       )
-      .bind(publicCapability, managementDigest)
+      .bind(authorization.publicCapability)
       .first<ThreadRow>();
     return row ? { status: "closed", thread: mapThread(row) } : { status: "not_found" };
   }
