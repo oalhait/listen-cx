@@ -1,0 +1,35 @@
+{
+  "name": "listen-cx",
+  "title": "Listen.cx",
+  "description": "Create a listen.cx link from a copied Spotify or Apple Music track URL",
+  "icon": "icon.png",
+  "author": "omar",
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "create-listen-link",
+      "title": "Create Listen.cx Link",
+      "subtitle": "Create and copy a cross-provider song link",
+      "description": "Create a listen.cx link from the Spotify or Apple Music track URL in your clipboard",
+      "mode": "no-view"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.104.16"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^2.0.3",
+    "@types/node": "^22.10.5",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.10"
+  },
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop",
+    "lint": "ray lint",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  }
+}
