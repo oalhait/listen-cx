@@ -1,6 +1,6 @@
 # listen.cx Raycast extension
 
-Copy a Spotify or Apple Music track URL, then run **Create listen.cx Link** in Raycast. The command creates the short link and puts it straight on your clipboard.
+Run **Create Listen.cx Link** in Raycast, then paste a Spotify or Apple Music track URL. A supported track URL already on your clipboard is prefilled automatically. The command creates the short link and puts it straight on your clipboard.
 
 ## Develop locally
 

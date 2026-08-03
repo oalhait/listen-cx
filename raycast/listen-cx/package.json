@@ -1,7 +1,7 @@
 {
   "name": "listen-cx",
   "title": "Listen.cx",
-  "description": "Create a listen.cx link from a copied Spotify or Apple Music track URL",
+  "description": "Create and copy a listen.cx link from any Spotify or Apple Music track URL",
   "icon": "icon.png",
   "author": "omar",
   "license": "MIT",
@@ -9,9 +9,9 @@
     {
       "name": "create-listen-link",
       "title": "Create Listen.cx Link",
-      "subtitle": "Create and copy a cross-provider song link",
-      "description": "Create a listen.cx link from the Spotify or Apple Music track URL in your clipboard",
-      "mode": "no-view"
+      "subtitle": "Paste a song URL and copy a cross-provider link",
+      "description": "Create and copy a listen.cx link from any Spotify or Apple Music track URL",
+      "mode": "view"
     }
   ],
   "dependencies": {

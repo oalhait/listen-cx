@@ -2,11 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { runCreateListenLink } from "./workflow";
 
 function makeDeps(
-  overrides: Partial<Parameters<typeof runCreateListenLink>[0]> = {},
+  overrides: Partial<Parameters<typeof runCreateListenLink>[1]> = {},
 ) {
   const toast = { style: "animated", title: "" };
   return {
-    readText: vi.fn().mockResolvedValue("https://open.spotify.com/track/abc"),
     copy: vi.fn().mockResolvedValue(undefined),
     close: vi.fn().mockResolvedValue(undefined),
     createLink: vi.fn().mockResolvedValue("https://listen.cx/Abc2345"),
@@ -17,14 +16,14 @@ function makeDeps(
 }
 
 describe("runCreateListenLink", () => {
-  it("asks for a copied URL when the clipboard is empty", async () => {
-    const deps = makeDeps({ readText: vi.fn().mockResolvedValue(undefined) });
+  it("asks for a URL when the submitted value is empty", async () => {
+    const deps = makeDeps();
 
-    await runCreateListenLink(deps);
+    await runCreateListenLink("", deps);
 
     expect(deps.showToast).toHaveBeenCalledWith({
       style: "failure",
-      title: "Copy a Spotify or Apple Music track URL first",
+      title: "Paste a Spotify or Apple Music track URL",
     });
     expect(deps.createLink).not.toHaveBeenCalled();
   });
@@ -32,7 +31,7 @@ describe("runCreateListenLink", () => {
   it("creates, copies, and closes after a successful conversion", async () => {
     const deps = makeDeps();
 
-    await runCreateListenLink(deps);
+    await runCreateListenLink(" https://open.spotify.com/track/abc ", deps);
 
     expect(deps.createLink).toHaveBeenCalledWith(
       "https://open.spotify.com/track/abc",
@@ -50,7 +49,7 @@ describe("runCreateListenLink", () => {
       createLink: vi.fn().mockRejectedValue(new Error("Service unavailable")),
     });
 
-    await runCreateListenLink(deps);
+    await runCreateListenLink("https://open.spotify.com/track/abc", deps);
 
     expect(deps.copy).not.toHaveBeenCalled();
     expect(deps.close).not.toHaveBeenCalled();

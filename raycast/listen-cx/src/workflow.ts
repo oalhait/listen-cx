@@ -7,7 +7,6 @@ export interface MutableToast {
 }
 
 export interface CreateListenLinkDeps {
-  readText(): Promise<string | undefined>;
   copy(link: string): Promise<void>;
   close(): Promise<void>;
   createLink(url: string): Promise<string>;
@@ -16,18 +15,14 @@ export interface CreateListenLinkDeps {
   ): Promise<MutableToast>;
 }
 
-export async function runCreateListenLink({
-  readText,
-  copy,
-  close,
-  createLink,
-  showToast,
-}: CreateListenLinkDeps) {
-  const sourceUrl = await readText();
+export async function runCreateListenLink(
+  sourceUrl: string,
+  { copy, close, createLink, showToast }: CreateListenLinkDeps,
+) {
   if (!sourceUrl?.trim()) {
     await showToast({
       style: "failure",
-      title: "Copy a Spotify or Apple Music track URL first",
+      title: "Paste a Spotify or Apple Music track URL",
     });
     return;
   }
