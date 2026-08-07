@@ -8,7 +8,7 @@ export interface MutableToast {
 
 export interface CreateListenLinkDeps {
   copy(link: string): Promise<void>;
-  close(): Promise<void>;
+  close?(): Promise<void>;
   createLink(url: string): Promise<string>;
   showToast(
     options: Pick<MutableToast, "style" | "title">,
@@ -36,7 +36,7 @@ export async function runCreateListenLink(
     await copy(link);
     toast.style = "success";
     toast.title = "listen.cx link copied";
-    await close();
+    await close?.();
   } catch (error) {
     toast.style = "failure";
     toast.title = "Couldn't create listen.cx link";

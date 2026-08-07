@@ -1,6 +1,8 @@
 # listen.cx Raycast extension
 
-Run **Create Listen.cx Link** in Raycast, then paste a Spotify or Apple Music track URL. A supported track URL already on your clipboard is prefilled automatically. The command creates the short link and puts it straight on your clipboard.
+Copy a Spotify or Apple Music track URL, then run **Create Listen.cx Link** in Raycast. The command immediately creates the short link and puts it straight on your clipboard.
+
+Run **Add Song to Thread** to add that copied track to a listen.cx Thread. Enter the Thread URL once; the extension remembers it, so later additions only need the copied song URL and Command-Return (`⌘↵`).
 
 ## Develop locally
 

@@ -9,8 +9,15 @@
     {
       "name": "create-listen-link",
       "title": "Create Listen.cx Link",
-      "subtitle": "Paste a song URL and copy a cross-provider link",
-      "description": "Create and copy a listen.cx link from any Spotify or Apple Music track URL",
+      "subtitle": "Convert the copied song URL instantly",
+      "description": "Create and copy a listen.cx link from the Spotify or Apple Music track URL on your clipboard",
+      "mode": "no-view"
+    },
+    {
+      "name": "add-to-thread",
+      "title": "Add Song to Thread",
+      "subtitle": "Add the copied song to your last Thread",
+      "description": "Add a Spotify or Apple Music track URL to a listen.cx Thread",
       "mode": "view"
     }
   ],

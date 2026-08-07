@@ -15,10 +15,14 @@ declare type Preferences = ExtensionPreferences
 declare namespace Preferences {
   /** Preferences accessible in the `create-listen-link` command */
   export type CreateListenLink = ExtensionPreferences & {}
+  /** Preferences accessible in the `add-to-thread` command */
+  export type AddToThread = ExtensionPreferences & {}
 }
 
 declare namespace Arguments {
   /** Arguments passed to the `create-listen-link` command */
   export type CreateListenLink = {}
+  /** Arguments passed to the `add-to-thread` command */
+  export type AddToThread = {}
 }
 
