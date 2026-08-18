@@ -48,8 +48,9 @@ describe("threadCreationPage", () => {
     expect(html).toContain("Anyone with this private link can remove songs or close the Thread.");
     expect(html).toContain('aria-live="polite"');
     expect(html).toContain("data.managementUrl");
+    expect(html).toContain("location.assign(privateManagementUrl)");
     expect(html).toContain('copied?"success":"error"');
-    expect(html).toContain(".shell { width:100%; max-width:720px;");
+    expect(html).toContain(".shell { width:100%; max-width:980px;");
     expect(html).not.toContain("#manage=");
   });
 
@@ -68,6 +69,27 @@ describe("threadCreationPage", () => {
 });
 
 describe("threadPage", () => {
+  it("emits syntactically valid client JavaScript for live updates", () => {
+    const html = threadPage(model());
+    const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1];
+
+    expect(script).toBeDefined();
+    expect(() => new Function(script!)).not.toThrow();
+  });
+
+  it("keeps fragment refresh state and realtime retries bounded", () => {
+    const html = threadPage(model());
+
+    expect(html.match(/const pageStatus=document\.getElementById\("page-status"\)/g)).toHaveLength(1);
+    expect(html).toContain('function setStatus(message,tone="info"){const pageStatus=document.getElementById("page-status")');
+    expect(html).toContain("let refreshGeneration=0");
+    expect(html).toContain("if(generation!==refreshGeneration");
+    expect(html).toContain('bindThreadControls(activeContributionId)');
+    expect(html).toContain('function bindShareControl()');
+    expect(html).toContain("Math.min(30000");
+    expect(html).toContain('window.addEventListener("pagehide"');
+  });
+
   it("renders a public open Thread with add, chronological Open, and Copy actions", () => {
     const html = threadPage(model());
 
@@ -76,16 +98,64 @@ describe("threadPage", () => {
     expect(html).toContain('action="/api/threads/threadabc/contributions"');
     expect(html).toContain('label for="song-url"');
     expect(html).toContain('href="https://listen.cx/song123"');
-    expect(html).toContain("Open in my provider");
+    expect(html).toContain("Open song");
     expect(html).toContain('data-copy-song="https://listen.cx/song123"');
     expect(html).toContain("data-open-song");
     expect(html).toContain('fetch("/api/thread-events"');
-    expect(html).toContain(".song-artist,.notice,.plain{color:#d1ad8d}");
-    expect(html).toContain('.state[data-state="open"]{border-color:#9fbd82;color:#d1e7bd}');
+    expect(html).toContain("--ls-coral: #ff8068;");
+    expect(html).toContain('.state[data-state="open"] { border-color:rgba(158,219,215,.5); color:var(--ls-ice); }');
+    expect(html).toContain('data-stack-experience');
+    expect(html).toContain('data-stack-case="0"');
+    expect(html).toContain('data-select-case="0"');
+    expect(html).toContain('aria-pressed="true"');
+    expect(html).toContain('aria-label="Thread CD rack"');
+    expect(html).toContain(".stack-experience { position:relative; isolation:isolate; width:min(100%,840px);");
+    expect(html).toContain('class="rack-frame"');
+    expect(html).toContain('class="rack-base"');
+    expect(html).toContain('class="rack-slot-support"');
+    expect(html).toContain(".stack-stage { --case-size:164px; --rack-step:124px;");
+    expect(html).toContain('class="case-actions"');
+    expect(html).toContain("visibility:hidden");
+    expect(html).toContain('pointer-events:none;');
+    expect(html).toContain('class="jewel-case"');
+    expect(html).toContain("1 song on the rack");
+    expect(html).toContain('scrollIntoView({behavior:reduced?"auto":"smooth",block:"center"})');
+    expect(html).not.toContain("thread-rack-snap");
+    expect(html).not.toContain('class="stack-progress"');
+    expect(html).not.toContain('class="case-disc"');
+    expect(html).not.toContain('class="case-kicker"');
     expect(html).toContain('data-public-url="https://listen.cx/t/threadabc"');
-    expect(html.indexOf("Kingston")).toBeLessThan(html.indexOf("Open in my provider"));
+    expect(html.indexOf("Kingston")).toBeLessThan(html.indexOf("Open song"));
     expect(html).not.toContain("Remove Kingston");
     expect(html).not.toContain("data-close-action=");
+  });
+
+  it("renders one physical case per song in chronological stack order", () => {
+    const html = threadPage(
+      model({
+        songs: [
+          model().songs[0]!,
+          {
+            contributionId: "contribution-2",
+            title: "Sunset season",
+            artist: "Unknown Mortal Orchestra",
+            artworkUrl: null,
+            canonicalUrl: "https://listen.cx/song456",
+          },
+        ],
+      }),
+    );
+
+    expect(html).toContain('data-stack-count="2"');
+    expect(html).toContain('data-stack-case="0"');
+    expect(html).toContain('data-stack-case="1"');
+    expect(html).toContain('data-select-case="1"');
+    expect(html).toContain("2 songs on the rack");
+    expect(html.match(/class="jewel-case"/g)).toHaveLength(2);
+    expect(html.match(/class="rack-slot-support"/g)).toHaveLength(2);
+    expect(html).not.toContain("--case-scale-y");
+    expect(html.indexOf("Kingston")).toBeLessThan(html.indexOf("Sunset season"));
+    expect(html).toContain('class="case-art-placeholder"');
   });
 
   it("renders an empty public Thread without losing the contribution action", () => {
@@ -94,6 +164,28 @@ describe("threadPage", () => {
     expect(html).toContain("No songs yet");
     expect(html).toContain("Add the first song");
     expect(html).toContain('id="add-song-form"');
+  });
+
+  it("renders the staging-only Apple Music proof control when configured", () => {
+    const html = threadPage(
+      model({
+        appleMusic: {
+          developerTokenAction: "/api/apple-music/developer-token",
+          spikeAction: "/api/threads/threadabc/apple-music/spike",
+        },
+      }),
+    );
+
+    expect(html).toContain("Try an Apple Music playlist");
+    expect(html).toContain('data-apple-music-spike');
+    expect(html).toContain("js-cdn.music.apple.com/musickit/v1/musickit.js");
+    expect(html).toContain("requestAppleMusicUserToken");
+    expect(html).toContain('features:["legacy-authenticate-method"]');
+    expect(html).toContain("authorize.music.apple.com");
+    expect(html).toContain("idmsa.apple.com");
+    expect(html).toContain("message.musicUserToken");
+    expect(html).not.toContain('window.addEventListener("message",onMessage,{once:true})');
+    expect(html).toContain("It does not keep syncing yet.");
   });
 
   it("preserves an entered song URL and presents a recoverable error", () => {
@@ -116,10 +208,10 @@ describe("threadPage", () => {
 
     expect(full).toContain("This Thread is full");
     expect(full).not.toContain('id="add-song-form"');
-    expect(full).toContain("Open in my provider");
+    expect(full).toContain("Open song");
     expect(closed).toContain("Contributions are closed");
     expect(closed).not.toContain('id="add-song-form"');
-    expect(closed).toContain("Copy song link");
+    expect(closed).toContain('data-copy-song="https://listen.cx/song123"');
   });
 
   it("renders exhausted state without false remove-to-make-room guidance", () => {

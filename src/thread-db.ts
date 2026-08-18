@@ -7,6 +7,7 @@ import {
   type SourceProvider,
 } from "./thread.js";
 import type { ManagementAuthorization } from "./thread-security.js";
+import type { ThreadPushSubscription } from "./thread-push.js";
 
 interface ThreadRow {
   id: number;
@@ -170,6 +171,12 @@ export interface ThreadStore {
     contributionId: number,
   ): Promise<RemoveContributionResult>;
   close(authorization: ManagementAuthorization): Promise<CloseThreadResult>;
+  upsertPushSubscription(
+    publicCapability: string,
+    subscription: ThreadPushSubscription,
+  ): Promise<boolean>;
+  removePushSubscription(publicCapability: string, endpoint: string): Promise<void>;
+  listPushSubscriptions(publicCapability: string): Promise<ThreadPushSubscription[]>;
 }
 
 export class D1ThreadStore implements ThreadStore {
@@ -510,6 +517,50 @@ export class D1ThreadStore implements ThreadStore {
     return existing
       ? { status: "closed", thread: mapThread(existing) }
       : { status: "not_found" };
+  }
+
+  async upsertPushSubscription(
+    publicCapability: string,
+    subscription: ThreadPushSubscription,
+  ): Promise<boolean> {
+    const result = await this.db
+      .withSession("first-primary")
+      .prepare(
+        `INSERT INTO thread_push_subscriptions (thread_id, endpoint, p256dh, auth)
+         SELECT id, ?, ?, ? FROM threads WHERE public_capability = ?
+         ON CONFLICT(thread_id, endpoint) DO UPDATE SET
+           p256dh = excluded.p256dh,
+           auth = excluded.auth,
+           updated_at = datetime('now')`,
+      )
+      .bind(subscription.endpoint, subscription.p256dh, subscription.auth, publicCapability)
+      .run();
+    return result.meta.changes > 0;
+  }
+
+  async removePushSubscription(publicCapability: string, endpoint: string): Promise<void> {
+    await this.db
+      .prepare(
+        `DELETE FROM thread_push_subscriptions
+         WHERE endpoint = ? AND thread_id = (
+           SELECT id FROM threads WHERE public_capability = ?
+         )`,
+      )
+      .bind(endpoint, publicCapability)
+      .run();
+  }
+
+  async listPushSubscriptions(publicCapability: string): Promise<ThreadPushSubscription[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT s.endpoint, s.p256dh, s.auth
+         FROM thread_push_subscriptions s
+         JOIN threads t ON t.id = s.thread_id
+         WHERE t.public_capability = ?`,
+      )
+      .bind(publicCapability)
+      .all<ThreadPushSubscription>();
+    return result.results;
   }
 }
 

@@ -156,6 +156,16 @@ describe("routes", () => {
     expect(html).toContain(`href="${RESOLVED.spotifyUrl}"`);
   });
 
+  it("?to=apple sets the cookie and keeps the Apple universal link HTTPS", async () => {
+    const res = await app.request(`/${slug}?to=apple`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("set-cookie")).toContain("pref=apple");
+    const html = await res.text();
+    expect(html).toContain("Open in Apple Music");
+    expect(html).toContain(`href="${RESOLVED.appleUrl}"`);
+    expect(html).not.toContain('href="music:');
+  });
+
   it("returning visit with cookie shows a direct provider handoff", async () => {
     const res = await app.request(`/${slug}`, { headers: { cookie: "pref=apple" } });
     expect(res.status).toBe(200);
@@ -163,7 +173,17 @@ describe("routes", () => {
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     const html = await res.text();
     expect(html).toContain('Open in Apple Music');
-    expect(html).toContain(`href="${RESOLVED.appleUrl!.replace("https:", "music:")}"`);
+    expect(html).toContain(`href="${RESOLVED.appleUrl}"`);
+    expect(html).not.toContain('href="music:');
+  });
+
+  it("returning visit with a Spotify cookie preserves the exact Spotify destination", async () => {
+    const res = await app.request(`/${slug}`, { headers: { cookie: "pref=spotify" } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+    const html = await res.text();
+    expect(html).toContain("Open in Spotify");
+    expect(html).toContain(`href="${RESOLVED.spotifyUrl}"`);
   });
 
   it("partial links remember a provider and redirect to search", async () => {
@@ -182,7 +202,7 @@ describe("routes", () => {
     const choiceHtml = await choice.text();
     expect(choiceHtml).toContain('Search Apple Music');
     expect(choiceHtml).toContain(
-      `href="${appleSearchUrl(partial.title, partial.artist).replace("https:", "music:")}"`,
+      `href="${appleSearchUrl(partial.title, partial.artist)}"`,
     );
     expect(choiceHtml).toContain('Opens Apple Music search results');
 
@@ -193,7 +213,7 @@ describe("routes", () => {
     const returningHtml = await returning.text();
     expect(returningHtml).toContain('Search Apple Music');
     expect(returningHtml).toContain(
-      `href="${appleSearchUrl(partial.title, partial.artist).replace("https:", "music:")}"`,
+      `href="${appleSearchUrl(partial.title, partial.artist)}"`,
     );
   });
 
@@ -211,7 +231,7 @@ describe("routes", () => {
     const html = await res.text();
     expect(html).toContain('Search Apple Music');
     expect(html).toContain(
-      `href="${appleSearchUrl(unsafe.title, unsafe.artist).replace("https:", "music:")}"`,
+      `href="${appleSearchUrl(unsafe.title, unsafe.artist)}"`,
     );
     expect(html).not.toContain('javascript:alert');
   });
@@ -231,7 +251,7 @@ describe("routes", () => {
     const html = await res.text();
     expect(html).toContain("Open in Apple Music");
     expect(html).toContain(
-      `href="music://music.apple.com/us/album/kingston/123456789?i=123456790"`,
+      `href="https://music.apple.com/us/album/kingston/123456789?i=123456790"`,
     );
   });
 

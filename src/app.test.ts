@@ -34,6 +34,20 @@ type AppOptions = {
   resolve?: (url: string) => Promise<Resolved | null>;
   creationAllowed?: boolean;
   contributionAllowed?: boolean;
+  appleMusic?: {
+    getDeveloperToken(): Promise<string>;
+    createThreadPlaylist(
+      userToken: string,
+      threadTitle: string,
+      trackIds: readonly string[],
+    ): Promise<{
+      id: string;
+      playlistId: string;
+      playlistUrl?: string;
+      url: string | null;
+      addedCount: number;
+    }>;
+  };
 };
 
 function makeApp(options: AppOptions = {}) {
@@ -56,13 +70,14 @@ function makeApp(options: AppOptions = {}) {
     threadStore,
     threadLimiters: { creation, contribution },
     threadEvents: { emit: (event) => events.push(event) },
+    appleMusic: options.appleMusic,
     threadsEnabled: options.threadsEnabled,
     baseUrl: BASE_URL,
   });
   return { app, events, linkStore, threadStore, resolve };
 }
 
-function publicMutationHeaders(action: "create-thread" | "add-song" | "thread-event") {
+function publicMutationHeaders(action: "create-thread" | "add-song" | "thread-event" | "apple-music-spike") {
   return {
     "content-type": "application/json",
     origin: BASE_URL,
@@ -184,6 +199,67 @@ describe("Thread routes", () => {
       headers: { cookie: created.cookie },
     });
     expect(await page.text()).toContain("Private management view");
+  });
+
+  it("keeps the Apple Music staging proof same-origin and never returns the user token", async () => {
+    const appleMusic = {
+      getDeveloperToken: vi.fn().mockResolvedValue("developer-token-fixture"),
+      createThreadPlaylist: vi.fn().mockResolvedValue({
+        id: "playlist-fixture",
+        playlistId: "playlist-fixture",
+        playlistUrl: "https://music.apple.com/us/playlist/fixture",
+        url: "https://music.apple.com/us/playlist/fixture",
+        addedCount: 1,
+      }),
+    };
+    const { app } = makeApp({ appleMusic });
+    const created = await createThread(app, "Apple proof");
+    await addSong(app, created.publicCapability, "apple-proof-song");
+
+    const tokenResponse = await app.request("/api/apple-music/developer-token", {
+      headers: { origin: BASE_URL },
+    });
+    expect(tokenResponse.status).toBe(200);
+    expect(await tokenResponse.json()).toEqual({
+      developerToken: "developer-token-fixture",
+      storefrontId: "us",
+    });
+
+    const musicUserToken = "music-user-token-fixture-secret";
+    const response = await app.request(
+      `/api/threads/${created.publicCapability}/apple-music/spike`,
+      {
+        method: "POST",
+        headers: publicMutationHeaders("apple-music-spike"),
+        body: JSON.stringify({ musicUserToken }),
+      },
+    );
+    expect(response.status).toBe(201);
+    const responseText = await response.text();
+    expect(JSON.parse(responseText)).toMatchObject({
+      status: "created",
+      playlistId: "playlist-fixture",
+      trackCount: 1,
+    });
+    expect(responseText).not.toContain(musicUserToken);
+    expect(appleMusic.createThreadPlaylist).toHaveBeenCalledWith(
+      musicUserToken,
+      "Apple proof",
+      ["1443109064"],
+    );
+
+    const foreignHeaders = new Headers(publicMutationHeaders("apple-music-spike"));
+    foreignHeaders.set("origin", "https://evil.example");
+    const denied = await app.request(
+      `/api/threads/${created.publicCapability}/apple-music/spike`,
+      {
+        method: "POST",
+        headers: foreignHeaders,
+        body: JSON.stringify({ musicUserToken }),
+      },
+    );
+    expect(denied.status).toBe(403);
+    expect(appleMusic.createThreadPlaylist).toHaveBeenCalledTimes(1);
   });
 
   it("emits only allowlisted aggregate Thread events", async () => {
@@ -649,7 +725,7 @@ describe("Thread routes", () => {
     const closedPage = await app.request(`/t/${created.publicCapability}`);
     const html = await closedPage.text();
     expect(html).toContain("Contributions are closed");
-    expect(html).toContain("Open in my provider");
+    expect(html).toContain("Open song");
   });
 
   it("uses a plain 404 for unknown Threads and preserves the existing homepage", async () => {

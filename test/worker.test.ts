@@ -1,6 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
-import { createThreadLimiters, getThreadMaximum, getWorkerApp } from "../src/worker.js";
+import { createThreadLimiters, getThreadMaximum, getWorkerApp, getWorkerBaseUrl } from "../src/worker.js";
 
 describe("worker", () => {
   beforeEach(async () => {
@@ -23,6 +23,15 @@ describe("worker", () => {
       creation: { check: expect.any(Function) },
       contribution: { check: expect.any(Function) },
     });
+  });
+
+  it("uses the local request origin for local development", () => {
+    expect(getWorkerBaseUrl({ BASE_URL: "" }, "http://localhost:8787/")).toBe(
+      "http://localhost:8787",
+    );
+    expect(getWorkerBaseUrl({ BASE_URL: "https://staging.listen.cx" }, "https://staging.listen.cx/healthz")).toBe(
+      "https://staging.listen.cx",
+    );
   });
 
   it("reuses the assembled app for the same immutable Worker configuration", () => {

@@ -4,11 +4,18 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --env staging",
+    "dev": "wrangler dev --env dev --local",
+    "dev:staging": "wrangler dev --env staging --local",
+    "dev:staging:remote": "wrangler dev --env staging --remote",
+    "setup:dev": "wrangler d1 create listen-cx-dev --env dev --location wnam --binding DB --update-config",
+    "deploy:dev": "wrangler d1 migrations apply DB --env dev --remote && wrangler deploy --env dev",
     "deploy:staging": "wrangler d1 migrations apply DB --env staging --remote && wrangler deploy --env staging",
     "deploy:production": "wrangler deploy --env=\"\"",
-    "migrate:local": "wrangler d1 migrations apply DB --env staging --local",
+    "migrate:local": "wrangler d1 migrations apply DB --env dev --local",
+    "migrate:dev:remote": "wrangler d1 migrations apply DB --env dev --remote",
     "migrate:staging": "wrangler d1 migrations apply DB --env staging --remote",
+    "migrate:staging:local": "wrangler d1 migrations apply DB --env staging --local",
+    "secrets:sync:apple:staging": "node scripts/sync-apple-music-staging-secrets.mjs",
     "migrate:production": "wrangler d1 migrations apply DB --remote",
     "types": "wrangler types",
     "types:check": "wrangler types --check",
@@ -18,12 +25,14 @@
   },
   "dependencies": {
     "hono": "^4.6.16",
-    "nanoid": "^5.0.9"
+    "nanoid": "^5.0.9",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.18.4",
     "@cloudflare/workers-types": "^5.20260713.1",
     "@types/node": "^22.10.5",
+    "@types/web-push": "^3.6.4",
     "typescript": "^5.7.3",
     "vite": "^8.1.4",
     "vitest": "^4.1.10",

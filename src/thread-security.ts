@@ -122,7 +122,12 @@ export function isAllowedManagementRequest(request: Request, baseUrl: string): b
 export function isAllowedPublicMutation(
   request: Request,
   baseUrl: string,
-  action: "create-thread" | "add-song" | "thread-event",
+  action:
+    | "create-thread"
+    | "add-song"
+    | "thread-event"
+    | "thread-notifications"
+    | "apple-music-spike",
 ): boolean {
   if (request.method !== "POST") return false;
 

@@ -13,7 +13,13 @@ import {
   type ThreadEventSink,
 } from "./thread.js";
 import type { ThreadPageView, ThreadStore } from "./thread-db.js";
-import { threadCreationPage, threadPage, type ThreadPageModel } from "./thread-page.js";
+import {
+  threadCreationPage,
+  threadNotificationServiceWorker,
+  threadPage,
+  threadPageFragment,
+  type ThreadPageModel,
+} from "./thread-page.js";
 import {
   authorizeManagementCapability,
   clearManagementCookie,
@@ -26,52 +32,19 @@ import {
   type AttemptLimiter,
   type ManagementAuthorization,
 } from "./thread-security.js";
-import { appleSearchUrl, parseTrackUrl, spotifySearchUrl } from "./urls.js";
+import { parseTrackUrl } from "./urls.js";
+import {
+  parseThreadPushSubscription,
+  type ThreadPushNotifier,
+} from "./thread-push.js";
+import { providerTarget } from "./provider-links.js";
+import type { AppleMusicPlaylistResult } from "./apple-music-mirror.js";
 
 const PREF_COOKIE = "pref";
 const ONE_YEAR = 60 * 60 * 24 * 365;
 const MAX_CREATE_BODY_BYTES = 4096;
 const BOT_UA =
   /bot|crawler|spider|facebookexternalhit|twitterbot|slackbot|discordbot|whatsapp|telegram|linkedinbot|applebot|imessage|preview/i;
-
-function appleMusicDeepLink(url: URL): string {
-  if (url.hostname === "itunes.apple.com" || url.hostname === "geo.music.apple.com") {
-    url.hostname = "music.apple.com";
-  }
-  return url.toString().replace(/^https:/, "music:");
-}
-
-function providerTarget(
-  row: LinkRow,
-  provider: "spotify" | "apple",
-): { url: string; isExactMatch: boolean } {
-  const fallbackUrl =
-    provider === "spotify"
-      ? spotifySearchUrl(row.title, row.artist)
-      : appleSearchUrl(row.title, row.artist);
-  const fallback =
-    provider === "apple" ? appleMusicDeepLink(new URL(fallbackUrl)) : fallbackUrl;
-  const candidate = provider === "spotify" ? row.spotify_url : row.apple_url;
-  if (!candidate) return { url: fallback, isExactMatch: false };
-
-  try {
-    const url = new URL(candidate);
-    const validHost =
-      provider === "spotify"
-        ? url.hostname === "open.spotify.com"
-        : url.hostname === "music.apple.com" ||
-          url.hostname === "geo.music.apple.com" ||
-          url.hostname === "itunes.apple.com";
-    return url.protocol === "https:" && validHost
-      ? {
-          url: provider === "apple" ? appleMusicDeepLink(url) : url.toString(),
-          isExactMatch: true,
-        }
-      : { url: fallback, isExactMatch: false };
-  } catch {
-    return { url: fallback, isExactMatch: false };
-  }
-}
 
 export interface AppDeps {
   resolver: Pick<Resolver, "resolve">;
@@ -82,6 +55,21 @@ export interface AppDeps {
     contribution: AttemptLimiter;
   };
   threadEvents?: ThreadEventSink;
+  threadRealtime?: {
+    connect(request: Request, publicCapability: string): Promise<Response>;
+    publish(publicCapability: string): Promise<void>;
+  };
+  threadPushNotifier?: ThreadPushNotifier;
+  appleMusic?: {
+    getDeveloperToken(): Promise<string>;
+    createThreadPlaylist(
+      userToken: string,
+      threadTitle: string,
+      trackIds: readonly string[],
+    ): Promise<AppleMusicPlaylistResult>;
+  };
+  vapidPublicKey?: string;
+  waitUntil?: (task: Promise<unknown>) => void;
   threadsEnabled?: boolean;
   baseUrl: string;
 }
@@ -137,6 +125,11 @@ export function createApp({
   threadStore,
   threadLimiters,
   threadEvents,
+  threadRealtime,
+  threadPushNotifier,
+  appleMusic,
+  vapidPublicKey,
+  waitUntil,
   threadsEnabled = true,
   baseUrl,
 }: AppDeps) {
@@ -217,14 +210,53 @@ export function createApp({
         add: `/api/threads/${view.thread.publicCapability}/contributions`,
         activateManagement: `/t/${view.thread.publicCapability}/manage/activate`,
         close: managed ? `/t/${view.thread.publicCapability}/manage/close` : undefined,
+        fragment: `/api/threads/${view.thread.publicCapability}/fragment`,
+        subscribeNotifications: `/api/threads/${view.thread.publicCapability}/push-subscriptions`,
       },
+      notifications: vapidPublicKey
+        ? { vapidPublicKey, serviceWorkerUrl: "/t/thread-notifications-sw.js" }
+        : undefined,
+      appleMusic: appleMusic
+        ? {
+            developerTokenAction: "/api/apple-music/developer-token",
+            spikeAction: `/api/threads/${view.thread.publicCapability}/apple-music/spike`,
+          }
+        : undefined,
       songs,
     };
+  }
+
+  function publishThreadChange(context: Context, publicCapability: string) {
+    if (!threadRealtime) return;
+    (waitUntil ?? context.executionCtx.waitUntil.bind(context.executionCtx))(
+      threadRealtime.publish(publicCapability).catch((error) => {
+        console.error(JSON.stringify({ message: "Thread live update failed", error: String(error) }));
+      }),
+    );
   }
 
   async function resolveAndStore(url: string) {
     const resolved = await resolver.resolve(url);
     return resolved ? store.upsert(resolved) : null;
+  }
+
+  function isAllowedSameOriginRead(request: Request): boolean {
+    const origin = request.headers.get("origin");
+    if (!origin) return true;
+    try {
+      return origin === new URL(baseUrl).origin;
+    } catch {
+      return false;
+    }
+  }
+
+  async function appleTrackIds(view: ThreadPageView): Promise<string[]> {
+    const rows = await Promise.all(view.contributions.map((contribution) => store.get(contribution.linkSlug)));
+    return rows.flatMap((row) => {
+      if (!row?.apple_url) return [];
+      const parsed = parseTrackUrl(row.apple_url);
+      return parsed?.provider === "apple" ? [parsed.id] : [];
+    });
   }
 
   app.get("/", (c) => c.html(homePage(baseUrl)));
@@ -348,6 +380,11 @@ export function createApp({
   app.get("/t/:slug", async (c) => {
     if (!threadsEnabled) return c.text("Link not found.", 404);
     const publicCapability = c.req.param("slug");
+    if (publicCapability === "thread-notifications-sw.js") {
+      c.header("Cache-Control", "no-cache");
+      c.header("Content-Type", "application/javascript; charset=utf-8");
+      return c.body(threadNotificationServiceWorker());
+    }
     const view = await threadStore.getPageView(publicCapability);
     if (!view) return c.text("Link not found.", 404);
     applyThreadHeaders(c);
@@ -373,6 +410,139 @@ export function createApp({
         url: song.canonicalUrl,
       })),
     });
+  });
+
+  app.get("/api/apple-music/developer-token", async (c) => {
+    if (!threadsEnabled || !appleMusic) return c.text("Not found.", 404);
+    applyThreadHeaders(c);
+    if (!isAllowedSameOriginRead(c.req.raw)) {
+      return c.json({ code: "forbidden", error: "Apple Music authorization denied." }, 403);
+    }
+    try {
+      const developerToken = await appleMusic.getDeveloperToken();
+      return c.json({ developerToken, storefrontId: "us" });
+    } catch {
+      return c.json(
+        { code: "provider_unavailable", error: "Apple Music is unavailable on this staging deployment." },
+        503,
+      );
+    }
+  });
+
+  app.post("/api/threads/:slug/apple-music/spike", async (c) => {
+    if (!threadsEnabled || !appleMusic) return c.text("Not found.", 404);
+    applyThreadHeaders(c);
+    if (!isAllowedPublicMutation(c.req.raw, baseUrl, "apple-music-spike")) {
+      return c.json({ code: "forbidden", error: "Apple Music authorization denied." }, 403);
+    }
+    const parsedBody = await readBoundedJson(c.req.raw);
+    if (
+      !parsedBody.ok ||
+      !isRecord(parsedBody.value) ||
+      typeof parsedBody.value.musicUserToken !== "string" ||
+      parsedBody.value.musicUserToken.length < 20
+    ) {
+      return c.json({ code: "invalid_token", error: "Authorize Apple Music before creating a playlist." }, 400);
+    }
+    const publicCapability = c.req.param("slug");
+    const view = await threadStore.getPageView(publicCapability);
+    if (!view) return c.json({ code: "not_found", error: "Thread not found." }, 404);
+    const trackIds = await appleTrackIds(view);
+    if (!trackIds.length) {
+      return c.json(
+        { code: "no_eligible_tracks", error: "This Thread has no matched Apple Music songs yet." },
+        422,
+      );
+    }
+    try {
+      const result = await appleMusic.createThreadPlaylist(
+        parsedBody.value.musicUserToken,
+        view.thread.title,
+        trackIds,
+      );
+      return c.json({ status: "created", ...result, trackCount: trackIds.length }, 201);
+    } catch (error) {
+      const status =
+        typeof error === "object" && error !== null && "status" in error &&
+        typeof error.status === "number" && error.status >= 400 && error.status < 600
+          ? error.status
+          : 503;
+      console.error(JSON.stringify({ message: "Apple Music staging proof failed", status }));
+      const authorizationError =
+        status === 401
+          ? "Apple Music developer authorization was rejected. Check the MusicKit key and Media ID association."
+          : "Apple Music account authorization was rejected. Authorize Apple Music with an account that can create library playlists.";
+      return c.json(
+        {
+          code:
+            status === 401
+              ? "developer_authorization_required"
+              : status === 403
+                ? "music_user_authorization_required"
+                : "provider_unavailable",
+          error: status === 401 || status === 403 ? authorizationError : "Apple Music could not create the playlist. Try again.",
+        },
+        status === 401 || status === 403 ? 401 : 503,
+      );
+    }
+  });
+
+  app.get("/api/threads/:slug/fragment", async (c) => {
+    if (!threadsEnabled) return c.text("Link not found.", 404);
+    applyThreadHeaders(c);
+    const publicCapability = c.req.param("slug");
+    const view = await threadStore.getPageView(publicCapability);
+    if (!view) return c.json({ code: "not_found", error: "Thread not found." }, 404);
+    const managed = Boolean(await authorizeCookie(c, publicCapability));
+    c.header("Cache-Control", "no-store");
+    return c.json({ html: threadPageFragment(await threadModel(view, managed)) });
+  });
+
+  app.get("/api/threads/:slug/live", async (c) => {
+    if (!threadsEnabled || !threadRealtime) return c.text("Link not found.", 404);
+    const publicCapability = c.req.param("slug");
+    if (!(await threadStore.getPageView(publicCapability))) {
+      return c.json({ code: "not_found", error: "Thread not found." }, 404);
+    }
+    return threadRealtime.connect(c.req.raw, publicCapability);
+  });
+
+  app.post("/api/threads/:slug/push-subscriptions", async (c) => {
+    if (!threadsEnabled || !vapidPublicKey) return c.text("Link not found.", 404);
+    applyThreadHeaders(c);
+    if (!isAllowedPublicMutation(c.req.raw, baseUrl, "thread-notifications")) {
+      return c.json({ code: "forbidden", error: "Notification preference denied." }, 403);
+    }
+    const parsedBody = await readBoundedJson(c.req.raw);
+    if (!parsedBody.ok || !isRecord(parsedBody.value)) {
+      return c.json({ code: "invalid_subscription", error: "Send a push subscription." }, 400);
+    }
+    const subscription = parseThreadPushSubscription(parsedBody.value.subscription);
+    if (!subscription) {
+      return c.json({ code: "invalid_subscription", error: "That notification subscription is invalid." }, 422);
+    }
+    const publicCapability = c.req.param("slug");
+    const updated = await threadStore.upsertPushSubscription(publicCapability, subscription);
+    if (!updated) return c.json({ code: "not_found", error: "Thread not found." }, 404);
+    return c.body(null, 204);
+  });
+
+  app.delete("/api/threads/:slug/push-subscriptions", async (c) => {
+    if (!threadsEnabled || !vapidPublicKey) return c.text("Link not found.", 404);
+    applyThreadHeaders(c);
+    if (!isAllowedPublicMutation(c.req.raw, baseUrl, "thread-notifications")) {
+      return c.json({ code: "forbidden", error: "Notification preference denied." }, 403);
+    }
+    const parsedBody = await readBoundedJson(c.req.raw);
+    if (!parsedBody.ok || !isRecord(parsedBody.value)) {
+      return c.json({ code: "invalid_subscription", error: "Send a push subscription." }, 400);
+    }
+    const subscription = parseThreadPushSubscription(parsedBody.value.subscription);
+    if (!subscription) {
+      return c.json({ code: "invalid_subscription", error: "That notification subscription is invalid." }, 422);
+    }
+    await threadStore.removePushSubscription(c.req.param("slug"), subscription.endpoint);
+    return c.body(null, 204);
   });
 
   app.post("/api/threads/:slug/contributions", async (c) => {
@@ -499,6 +669,19 @@ export function createApp({
           outcome: "accepted",
           count: result.contribution.position,
         });
+        publishThreadChange(c, publicCapability);
+        if (threadPushNotifier) {
+          (waitUntil ?? c.executionCtx.waitUntil.bind(c.executionCtx))(
+            threadPushNotifier.notifySongAdded({
+              publicCapability,
+              title: link.title,
+              artist: link.artist,
+              publicUrl: `${baseUrl}/t/${publicCapability}`,
+            }).catch((error) => {
+              console.error(JSON.stringify({ message: "Thread push delivery failed", error: String(error) }));
+            }),
+          );
+        }
         return c.json({ status: "accepted", contributionId: result.contribution.id }, 201);
       case "existing":
         emitThreadEvent({ event: "thread_contribution", outcome: "existing" });
@@ -598,6 +781,7 @@ export function createApp({
     const result = await threadStore.removeContribution(authorization, contributionId);
     if (result.status === "removed") {
       emitThreadEvent({ event: "thread_management", outcome: "removed" });
+      publishThreadChange(c, publicCapability);
       return c.json({ status: "removed" });
     }
     return c.json({ code: "not_found", error: "Contribution not found." }, 404);
@@ -617,6 +801,7 @@ export function createApp({
     const result = await threadStore.close(authorization);
     if (result.status === "closed") {
       emitThreadEvent({ event: "thread_management", outcome: "closed" });
+      publishThreadChange(c, publicCapability);
       return c.json({ status: "closed" });
     }
     return c.json({ code: "not_found", error: "Thread not found." }, 404);
