@@ -9,5 +9,5 @@
     "types": ["node", "@cloudflare/vitest-pool-workers/types"],
     "outDir": "dist"
   },
-  "include": ["src", "test", "vitest.config.ts", "worker-configuration.d.ts"]
+  "include": ["src", "test", "vitest.config.ts", "vitest.live.config.ts", "worker-configuration.d.ts"]
 }

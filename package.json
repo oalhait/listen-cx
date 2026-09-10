@@ -15,24 +15,22 @@
     "migrate:dev:remote": "wrangler d1 migrations apply DB --env dev --remote",
     "migrate:staging": "wrangler d1 migrations apply DB --env staging --remote",
     "migrate:staging:local": "wrangler d1 migrations apply DB --env staging --local",
-    "secrets:sync:apple:staging": "node scripts/sync-apple-music-staging-secrets.mjs",
     "migrate:production": "wrangler d1 migrations apply DB --remote",
     "types": "wrangler types",
     "types:check": "wrangler types --check",
     "check:startup": "wrangler check startup",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:live": "vitest run --config vitest.live.config.ts"
   },
   "dependencies": {
     "hono": "^4.6.16",
-    "nanoid": "^5.0.9",
-    "web-push": "^3.6.7"
+    "nanoid": "^5.0.9"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.18.4",
     "@cloudflare/workers-types": "^5.20260713.1",
     "@types/node": "^22.10.5",
-    "@types/web-push": "^3.6.4",
     "typescript": "^5.7.3",
     "vite": "^8.1.4",
     "vitest": "^4.1.10",

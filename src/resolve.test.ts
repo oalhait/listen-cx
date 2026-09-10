@@ -1,52 +1,35 @@
 import { describe, expect, it, vi } from "vitest";
-import { ItunesClient } from "./itunes.js";
 import { Resolver } from "./resolve.js";
 import { SpotifyClient } from "./spotify.js";
+import { ItunesClient } from "./itunes.js";
 
-const TRACK_ID = "3sFoSCg2KoaCUrOeKYMqvI";
+function setup() {
+  const spotify = new SpotifyClient();
+  const apple = new ItunesClient();
+  const getTrack = vi.spyOn(spotify, "getTrack").mockResolvedValue({ id: "4SN5Kkig8iJ8vdwsOoP7IO", title: "Cataracts", artist: "Freddie Gibbs, Madlib", durationMs: 219823, artworkUrl: null });
+  const lookup = vi.spyOn(apple, "lookupById").mockResolvedValue({ trackId: 1452886612, title: "Kingston", artist: "Faye Webster", durationMs: 202000, artworkUrl: null, trackViewUrl: "https://music.apple.com/gb/song/kingston/1452886612" });
+  const search = vi.spyOn(apple, "searchTracks");
+  return { resolver: new Resolver(spotify, apple), getTrack, lookup, search };
+}
 
-const SPOTIFY_EMBED = `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({
-  props: {
-    pageProps: {
-      state: {
-        data: {
-          entity: {
-            type: "track",
-            id: TRACK_ID,
-            title: "Who Can I Run To",
-            artists: [{ name: "The Jones Girls" }],
-            duration: 204720,
-            visualIdentity: { image: [] },
-          },
-        },
-      },
-    },
-  },
-})}</script>`;
-
-describe("Resolver", () => {
-  it("creates a spotify-backed link when apple matching is rate-limited", async () => {
-    const fetcher = vi.fn<typeof fetch>(async (input) => {
-      const url = String(input);
-      if (url.includes("/oembed")) {
-        return Response.json({
-          title: "Who Can I Run To",
-          thumbnail_url: "https://img.test/art.jpg",
-        });
-      }
-      if (url.includes("/embed/track/")) return new Response(SPOTIFY_EMBED);
-      return new Response(null, { status: 429 });
-    });
-    const resolver = new Resolver(new SpotifyClient(fetcher), new ItunesClient(fetcher));
-
-    await expect(
-      resolver.resolve(`https://open.spotify.com/track/${TRACK_ID}`),
-    ).resolves.toMatchObject({
-      title: "Who Can I Run To",
-      artist: "The Jones Girls",
-      spotifyUrl: `https://open.spotify.com/track/${TRACK_ID}`,
-      appleUrl: null,
-      complete: false,
-    });
+describe("source metadata resolution", () => {
+  it("resolves Spotify without guessing an Apple match", async () => {
+    const { resolver, search } = setup();
+    expect(await resolver.resolve("https://open.spotify.com/track/4SN5Kkig8iJ8vdwsOoP7IO")).toMatchObject({ title: "Cataracts", appleUrl: null, complete: false, isrc: null });
+    expect(search).not.toHaveBeenCalled();
+  });
+  it("preserves the Apple storefront and leaves Spotify unresolved", async () => {
+    const { resolver, lookup, getTrack } = setup();
+    expect(await resolver.resolve("https://music.apple.com/gb/song/kingston/1452886612")).toMatchObject({ title: "Kingston", spotifyUrl: null, complete: false });
+    expect(lookup).toHaveBeenCalledWith("1452886612", "gb");
+    expect(getTrack).not.toHaveBeenCalled();
+  });
+  it("returns null for invalid URLs and missing tracks", async () => {
+    const { resolver, getTrack, lookup } = setup();
+    expect(await resolver.resolve("junk")).toBeNull();
+    expect(getTrack).not.toHaveBeenCalled();
+    expect(lookup).not.toHaveBeenCalled();
+    getTrack.mockResolvedValueOnce(null);
+    expect(await resolver.resolve("https://open.spotify.com/track/4SN5Kkig8iJ8vdwsOoP7IO")).toBeNull();
   });
 });

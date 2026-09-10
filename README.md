@@ -1,48 +1,74 @@
-# listen.cx
+# listen.cx primitives
 
-A cross-provider song link that remembers where each listener listens.
+A small TypeScript backend for Spotify and Apple Music track metadata and stored
+short links. The previous web UI, threads, push notifications, Raycast extension,
+playlist experiments, and fuzzy cross-provider matching have been removed.
 
-## Local development
+## Run locally
 
-```
+```sh
 pnpm install
-pnpm types
 pnpm migrate:local
 pnpm dev
 ```
 
-`pnpm dev` runs the isolated `dev` Wrangler environment against local D1 state.
-Use `pnpm migrate:staging:local` followed by `pnpm dev:staging` for a local
-staging-config simulation, or `pnpm dev:staging:remote` when you intentionally
-need the shared QA database.
-The shared staging environment remains `staging.listen.cx`; it is no longer the
-default local development target.
+## API
+
+- `GET /healthz` checks database connectivity; returns 200 or 503.
+- `POST /create` accepts JSON `{ "url": "<Spotify or Apple Music track URL>" }`.
+  Returns `{ link, slug, title, artist, artworkUrl }`. Requests are limited to 4 KiB.
+- `GET /:slug` returns the stored row as JSON, including `spotify_url` and
+  `apple_url`. It does not contact providers, render HTML, or redirect.
+
+New rows contain only the source provider's URL. The opposite provider URL is
+null. Every creation gets a new seven-character slug. Invalid inputs return 400,
+missing tracks return 404, oversized bodies return 413, and provider failures
+return 502. Storage failures return 500.
+
+```sh
+curl http://localhost:8787/create \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://open.spotify.com/track/4SN5Kkig8iJ8vdwsOoP7IO"}'
+```
+
+## Retained code
+
+- `src/urls.ts`: track URL parsing and provider URL builders.
+- `src/spotify.ts`: public oEmbed and embed metadata lookup.
+- `src/itunes.ts`: Apple lookup, catalog search, and public-page metadata fallback.
+- `src/fetch.ts`: bounded retries and per-attempt timeouts.
+- `src/resolve.ts`: source-provider metadata only; no match guessing.
+- `src/db.ts`, `src/app.ts`, `src/worker.ts`: D1 storage and JSON API.
+
+`ItunesClient.searchTracks` returns catalog candidates. It does not establish
+that a result matches a recording on another provider. Spotify metadata and the
+Apple fallback depend on public page formats and can fail if those formats change.
+Unavailable tracks return null; unavailable or malformed provider responses throw.
 
 ## Verification
 
-```
-pnpm test
+```sh
+pnpm test           # deterministic tests in the Cloudflare Worker runtime
 pnpm typecheck
-pnpm types:check
+pnpm test:live      # read-only network checks; no credentials required
 ```
 
-## Cloudflare deployment
+The live checks assert known Spotify titles and artists, Apple lookup and search
+in US/GB storefronts, and the Apple page fallback. They are separate from offline
+regression tests because availability and catalogs change. Passing a sample is
+not a guarantee for every track or future provider response. During the restart,
+all five live checks and local Worker create/read flows for both providers passed.
+One initial Spotify request timed out; the next live run passed.
 
-```
-pnpm setup:dev        # one time: create listen-cx-dev and write its D1 ID
-pnpm deploy:dev       # applies dev migrations and deploys only dev.listen.cx
+## Existing deployments and data
 
-pnpm migrate:staging
-pnpm deploy:staging
+This restart has not been deployed. Historical D1 migrations remain unchanged;
+no remote data has been deleted. Existing rows retain their original values,
+including any old inferred cross-provider URLs. Those values have not been
+reverified, and the API does not certify them as matches.
 
-pnpm migrate:production
-pnpm deploy:production
-```
-
-Wrangler is pinned to the personal Cloudflare account in `wrangler.jsonc`.
-The `dev`, staging, and production environments each have separate D1 binding
-configuration. The dev Worker uses its `workers.dev` URL so local development
-and deployment share one safe origin without requiring a DNS change. The first
-`setup:dev`/`deploy:dev` run must be performed with access to the Cloudflare
-account; Wrangler prints the deployed dev URL. No production command is needed
-for local development.
+The Worker no longer exports the old Thread Durable Object. Deploying over an
+existing installation requires a deliberate Durable Object migration decision
+first; this change does not schedule deletion of its stored data. Production
+commands must be run by Omar. A deployment also changes short links from the old
+receiver UI to JSON, so existing consumers must be considered before release.

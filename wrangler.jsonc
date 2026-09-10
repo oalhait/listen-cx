@@ -1,187 +1,78 @@
 {
-	"$schema": "./node_modules/wrangler/config-schema.json",
-	"name": "listen-cx",
-	"main": "src/worker.ts",
-	"account_id": "a353a278b3ec25248a6b5426d7fd1775",
-	"compatibility_date": "2026-07-13",
-	"compatibility_flags": [
-		"nodejs_compat"
-	],
-	"workers_dev": true,
-	"preview_urls": true,
-	"routes": [
-		{
-			"pattern": "listen.cx/*",
-			"zone_name": "listen.cx"
-		}
-	],
-	"vars": {
-		"BASE_URL": "https://listen.cx",
-		"THREADS_ENABLED": false,
-		"THREAD_MAX_THREADS": 10000,
-		"APPLE_MUSIC_ENABLED": false,
-		"VAPID_PUBLIC_KEY": "",
-		"VAPID_SUBJECT": "mailto:hello@listen.cx"
-	},
-	"durable_objects": {
-		"bindings": [
-			{
-				"name": "THREAD_LIVE",
-				"class_name": "ThreadLive"
-			}
-		]
-	},
-	"migrations": [
-		{
-			"tag": "v1",
-			"new_sqlite_classes": [
-				"ThreadLive"
-			]
-		}
-	],
-	"d1_databases": [
-		{
-			"binding": "DB",
-			"database_name": "listen-cx-production",
-			"database_id": "641a57b8-aa04-445f-af5b-8f25bfc0c892",
-			"migrations_dir": "migrations"
-		}
-	],
-	"ratelimits": [
-		{
-			"name": "THREAD_CREATE_RATE_LIMITER",
-			"namespace_id": "713001",
-			"simple": {
-				"limit": 10,
-				"period": 60
-			}
-		},
-		{
-			"name": "THREAD_CONTRIBUTION_RATE_LIMITER",
-			"namespace_id": "713002",
-			"simple": {
-				"limit": 30,
-				"period": 60
-			}
-		}
-	],
-	"observability": {
-		"enabled": true,
-		"logs": {
-			"enabled": true,
-			"head_sampling_rate": 1,
-			"invocation_logs": false
-		},
-		"traces": {
-			"enabled": true,
-			"head_sampling_rate": 0.01
-		}
-	},
-	"env": {
-		"dev": {
-			"name": "listen-cx-dev",
-			"routes": [],
-			"vars": {
-				"BASE_URL": "",
-				"THREADS_ENABLED": true,
-				"THREAD_MAX_THREADS": 10000,
-				"APPLE_MUSIC_ENABLED": false,
-				"VAPID_PUBLIC_KEY": "",
-				"VAPID_SUBJECT": "mailto:hello@listen.cx"
-			},
-			"durable_objects": {
-				"bindings": [
-					{
-						"name": "THREAD_LIVE",
-						"class_name": "ThreadLive"
-					}
-				]
-			},
-			"migrations": [
-				{
-					"tag": "v1",
-					"new_sqlite_classes": [
-						"ThreadLive"
-					]
-				}
-			],
-			"d1_databases": [
-				{
-					"binding": "DB",
-					"database_name": "listen-cx-dev",
-					"migrations_dir": "migrations",
-					"database_id": "2ff66c94-3fee-4763-bc6c-771a5c91dd0e"
-				}
-			],
-			"ratelimits": [
-				{
-					"name": "THREAD_CREATE_RATE_LIMITER",
-					"namespace_id": "713201",
-					"simple": {
-						"limit": 10,
-						"period": 60
-					}
-				},
-				{
-					"name": "THREAD_CONTRIBUTION_RATE_LIMITER",
-					"namespace_id": "713202",
-					"simple": {
-						"limit": 30,
-						"period": 60
-					}
-				}
-			]
-		},
-		"staging": {
-			"name": "listen-cx-staging",
-			"routes": [
-				{
-					"pattern": "staging.listen.cx",
-					"custom_domain": true
-				}
-			],
-			"vars": {
-				"BASE_URL": "https://staging.listen.cx",
-				"THREADS_ENABLED": true,
-				"THREAD_MAX_THREADS": 10000,
-				"APPLE_MUSIC_ENABLED": true,
-				"VAPID_PUBLIC_KEY": "BIWDPJWF2SFJYf3UtBcepbkL806nvoCaYypEyGOG4VfahvcD_hv3yQu1cqbPOS0nQoTq0Sh7Wg3VfUwtYtE9T-0",
-				"VAPID_SUBJECT": "mailto:hello@listen.cx"
-			},
-			"durable_objects": {
-				"bindings": [
-					{
-						"name": "THREAD_LIVE",
-						"class_name": "ThreadLive"
-					}
-				]
-			},
-			"d1_databases": [
-				{
-					"binding": "DB",
-					"database_name": "listen-cx-staging",
-					"database_id": "5c6403f5-eaa3-4dc2-befe-9b0bd8da4b9e",
-					"migrations_dir": "migrations"
-				}
-			],
-			"ratelimits": [
-				{
-					"name": "THREAD_CREATE_RATE_LIMITER",
-					"namespace_id": "713101",
-					"simple": {
-						"limit": 10,
-						"period": 60
-					}
-				},
-				{
-					"name": "THREAD_CONTRIBUTION_RATE_LIMITER",
-					"namespace_id": "713102",
-					"simple": {
-						"limit": 30,
-						"period": 60
-					}
-				}
-			]
-		}
-	}
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "listen-cx",
+  "main": "src/worker.ts",
+  "account_id": "a353a278b3ec25248a6b5426d7fd1775",
+  "compatibility_date": "2026-07-13",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": true,
+  "preview_urls": true,
+  "routes": [
+    {
+      "pattern": "listen.cx/*",
+      "zone_name": "listen.cx"
+    }
+  ],
+  "vars": {
+    "BASE_URL": "https://listen.cx"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "listen-cx-production",
+      "database_id": "641a57b8-aa04-445f-af5b-8f25bfc0c892",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": false
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01
+    }
+  },
+  "env": {
+    "dev": {
+      "name": "listen-cx-dev",
+      "routes": [],
+      "vars": {
+        "BASE_URL": ""
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "listen-cx-dev",
+          "migrations_dir": "migrations",
+          "database_id": "2ff66c94-3fee-4763-bc6c-771a5c91dd0e"
+        }
+      ]
+    },
+    "staging": {
+      "name": "listen-cx-staging",
+      "routes": [
+        {
+          "pattern": "staging.listen.cx",
+          "custom_domain": true
+        }
+      ],
+      "vars": {
+        "BASE_URL": "https://staging.listen.cx"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "listen-cx-staging",
+          "database_id": "5c6403f5-eaa3-4dc2-befe-9b0bd8da4b9e",
+          "migrations_dir": "migrations"
+        }
+      ]
+    }
+  }
 }

@@ -100,3 +100,27 @@ describe("ItunesClient", () => {
     });
   });
 });
+
+it("returns null when lookup is empty and the Apple page is missing", async () => {
+  const fetcher = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(Response.json({ results: [] }))
+    .mockResolvedValueOnce(new Response(null, { status: 404 }));
+  expect(await new ItunesClient(fetcher).lookupById("1172853943")).toBeNull();
+});
+
+it("maps direct lookup metadata and preserves the requested storefront", async () => {
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ results: [RESULT] }));
+  expect(await new ItunesClient(fetcher).lookupById("1172853943", "gb")).toEqual({
+    trackId: RESULT.trackId, title: RESULT.trackName, artist: RESULT.artistName,
+    durationMs: RESULT.trackTimeMillis, trackViewUrl: RESULT.trackViewUrl,
+    artworkUrl: "https://img.test/600x600bb.jpg",
+  });
+  expect(String(fetcher.mock.calls[0]?.[0])).toContain("country=gb");
+});
+
+it("rejects missing Apple page metadata", async () => {
+  const fetcher = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(Response.json({ results: [] }))
+    .mockResolvedValueOnce(new Response("<html></html>"));
+  await expect(new ItunesClient(fetcher).lookupById("1172853943")).rejects.toThrow("apple page metadata missing");
+});

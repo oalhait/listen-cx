@@ -14,6 +14,7 @@ export default defineConfig({
     })),
   ],
   test: {
+    exclude: ["**/node_modules/**", "src/*.live.test.ts"],
     setupFiles: ["./test/apply-migrations.ts"],
   },
 });
