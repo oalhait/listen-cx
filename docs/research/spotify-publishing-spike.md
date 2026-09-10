@@ -49,6 +49,12 @@ export SPOTIFY_SPIKE_CONTROL_TOKEN="$(openssl rand -hex 32)"
 doppler run --project listen-cx --config dev_personal -- node spikes/spotify-publisher/run.ts
 ```
 
+The prepared local session is already listening on port 8789. Its generated control token is stored privately at `~/.local/state/songlink/spotify-publisher/control-token`. To control that existing process, load that token instead of generating a different one:
+
+```sh
+export SPOTIFY_SPIKE_CONTROL_TOKEN="$(cat ~/.local/state/songlink/spotify-publisher/control-token)"
+```
+
 Keep the process running. In another terminal with the same control secret injected, request authorization:
 
 ```sh
