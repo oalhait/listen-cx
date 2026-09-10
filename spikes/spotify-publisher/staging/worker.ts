@@ -149,7 +149,7 @@ export class SpotifySpike extends DurableObject<Cloudflare.Env> {
     if (!invitation || invitation.expiresAt <= Date.now() || invitation.ticketHash !== await digest(ticket)) throw new PublishingError("invalid_invitation", 400);
     const csrf = random();
     const html = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect Spotify publisher</title><body><h1>Connect Spotify publisher</h1><p>Connect the Spotify account that will publish the shared test playlist. Omar will confirm it before publishing.</p><form method="post" action="/auth/start"><input type="hidden" name="ticket" value="${ticket}"><input type="hidden" name="csrf" value="${csrf}"><button type="submit">Continue with Spotify</button></form></body></html>`;
-    return new Response(html, { headers: { ...responseHeaders, "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'", "Set-Cookie": `__Host-spotify-invite=${csrf}; Path=/; Max-Age=600; HttpOnly; Secure; SameSite=Lax` } });
+    return new Response(html, { headers: { ...responseHeaders, "Referrer-Policy": "same-origin", "Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self' https://accounts.spotify.com", "Set-Cookie": `__Host-spotify-invite=${csrf}; Path=/; Max-Age=600; HttpOnly; Secure; SameSite=Lax` } });
   }
 
   private async start(request: Request): Promise<Response> {

@@ -240,6 +240,8 @@ describe("isolated Spotify staging security and HTTP", () => {
     expect(preview.status).toBe(200);
     const landing = await http(invitation.inviteUrl, { redirect: "manual" });
     expect(landing.status).toBe(200);
+    expect(landing.headers.get("referrer-policy")).toBe("same-origin");
+    expect(landing.headers.get("content-security-policy")).toContain("form-action 'self' https://accounts.spotify.com");
     const html = await landing.text();
     expect(html).toContain("Continue with Spotify");
     const csrf = html.match(/name="csrf" value="([a-f0-9]+)"/)![1]!;
@@ -248,6 +250,7 @@ describe("isolated Spotify staging security and HTTP", () => {
     const form = new URLSearchParams({ ticket, csrf }).toString();
     const post = (requestOrigin: string, browserCookie = cookie) => http(browserOrigin + "/auth/start", { method: "POST", headers: { Origin: requestOrigin, Cookie: browserCookie, "Content-Type": "application/x-www-form-urlencoded" }, body: form, redirect: "manual" });
     expect((await post("https://attacker.example")).status).toBe(403);
+    expect((await post("null")).status).toBe(403);
     expect((await post(browserOrigin, "")).status).toBe(400);
     expect((await post(browserOrigin)).status).toBe(302);
     expect((await post(browserOrigin)).status).toBe(400);

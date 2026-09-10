@@ -14,7 +14,7 @@ async function check(name, path, expected, options = {}, requestOrigin = path.st
   const body = await response.text();
   for (const secret of [secrets.OPERATOR_TOKEN, secrets.TOKEN_ENCRYPTION_KEY]) assert.ok(!body.includes(secret), `${name}: no secret disclosure`);
   assert.equal(response.headers.get("cache-control"), "no-store");
-  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(response.headers.get("referrer-policy"), response.headers.get("content-type")?.startsWith("text/html") ? "same-origin" : "no-referrer");
   assert.equal(response.headers.get("access-control-allow-origin"), null);
   results.push({ name, status: response.status });
   return { response, body };
