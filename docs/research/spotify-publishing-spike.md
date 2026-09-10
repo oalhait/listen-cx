@@ -9,15 +9,15 @@ The isolated publisher and local HTTP harness are implemented and tested. **No a
 | Proof layer | Result |
 | --- | --- |
 | Publisher contract with simulated Spotify responses | 20 passing tests |
-| Real loopback HTTP with simulated Spotify responses | 10 passing tests, including OAuth, explicit publisher confirmation, refresh and process-state restart |
+| Real loopback HTTP with simulated Spotify responses | 15 passing tests, including OAuth, explicit publisher confirmation, safe failure diagnostics, refresh and process-state restart |
 | Type checks | Spike TypeScript project and root `pnpm typecheck` pass |
 | Actual app mode, Premium and publisher allowlist | Not inspected; configuration is explicitly operator-reported |
 | Authenticated Spotify create/update and readback | Not run; credentials unavailable |
 | Listener outside OAuth allowlist saving and observing edits inside Spotify | Not run; second account and app access required |
 
-Initially no Spotify credentials were available. Omar subsequently added `SPOTIFY_CLIENT_ID` to Doppler `listen-cx/dev_personal`; a non-logging subprocess confirmed its presence. Publisher identity, dashboard mode, redirect registration and consent remain unverified. No production deployment or existing playlist mutation occurred.
+Initially no Spotify credentials were available. Omar subsequently added `SPOTIFY_CLIENT_ID` to Doppler `listen-cx/dev_personal`; a non-logging subprocess confirmed its presence. The first OAuth attempt failed on dashboard redirect matching. After the callback was corrected, consent reached token exchange, but the subsequent `/me` request failed. Its original status/body were discarded by the first harness version, so the cause is not established. Publisher identity and dashboard mode remain unverified. No production deployment or existing playlist mutation occurred.
 
-Test-first evidence: initial publisher and harness tests failed because their implementation modules did not exist. After implementation, 16 publisher and 7 HTTP tests passed. The recovery contract then failed with `recoverCreate is not a function`; its HTTP test failed with expected 409 versus actual 404. Both passed after implementation. The discovered-identity setup test then failed with `missing_configuration`; it passed after adding explicit confirmation, including rejection of unconfirmed writes. Final suite: 30 passing tests. The readback tests also cover changing snapshots, missing items, and relinked track IDs without claiming equivalence.
+Test-first evidence: initial publisher and harness tests failed because their implementation modules did not exist. After implementation, 16 publisher and 7 HTTP tests passed. The recovery contract then failed with `recoverCreate is not a function`; its HTTP test failed with expected 409 versus actual 404. Both passed after implementation. The discovered-identity setup test then failed with `missing_configuration`; it passed after adding explicit confirmation, including rejection of unconfirmed writes. After the live OAuth failure exposed discarded `/me` diagnostics, five more tests failed against the old status/error mapping and passed after preserving status and redacted provider fields. Final suite: 35 passing tests. The readback tests also cover changing snapshots, missing items, and relinked track IDs without claiming equivalence.
 
 ```sh
 pnpm exec vitest run --config spikes/spotify-publisher/vitest.config.ts
@@ -121,3 +121,9 @@ Ambiguous item writes stop immediately. An explicit retry starts from full repla
 Each destination serializes requests; a concurrent call gets 409 `busy` and must be retried. A process lock prevents two harnesses from sharing state. After an unclean exit, verify the PID recorded in `publisher.lock` is no longer running before removing only that stale lock. Preserve `destinations.json`, `binding.json` and `tokens.json`; deleting destination state removes duplicate-create protection. The private state directory is bound to one client ID and, after confirmation, one publisher ID. `appliedRevision` records the last verified revision; a failed newer multi-batch attempt can leave partial contents while that older revision remains recorded.
 
 The spike adds no website routes, accounts, membership, queues, D1 tables or deployment configuration. The production Worker does not import it. Later integration needs durable execution and operational recovery decisions after the live acceptance gates pass.
+
+## Live OAuth diagnostic follow-up
+
+The callback's `publisher_verification_failed` occurs after successful token exchange but before publisher-ID comparison, when `/v1/me` returns a non-success status. The original implementation incorrectly collapsed all such failures into 403 and discarded the response. This was a diagnostic bug; it does not establish the cause of Spotify's rejection.
+
+The harness now returns the real provider status plus bounded, credential-redacted `status`, `errorStatus`, `message` and `reason` fields. Authenticated `GET /status` retains the latest verification failure in process memory. A regression checks 401, 403, 429, 503 and plain-text errors, and verifies tokens are absent from both responses. No OAuth scope was changed speculatively. The local harness was restarted with private state intact and a fresh same-machine consent link issued to capture actual provider evidence.

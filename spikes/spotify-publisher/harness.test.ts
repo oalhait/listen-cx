@@ -18,12 +18,16 @@ async function fixture(discoverPublisher = false) {
   let now = Date.now();
   let tokenStatus = 200;
   let tokenPublisher = "publisher";
+  let profileFailure: { status: number; body: unknown } | undefined;
   const calls: { path: string; method: string; body: string }[] = [];
   const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input));
     calls.push({ path: url.pathname, method: init?.method ?? "GET", body: String(init?.body ?? "") });
     if (url.hostname === "accounts.spotify.com") return Response.json({ access_token: "provider-secret", refresh_token: "refresh-secret", expires_in: 3600, scope: "playlist-modify-public", token_type: "Bearer" }, { status: tokenStatus });
-    if (url.pathname === "/v1/me") return Response.json({ id: tokenPublisher });
+    if (url.pathname === "/v1/me") {
+      if (profileFailure) return typeof profileFailure.body === "string" ? new Response(profileFailure.body, { status: profileFailure.status }) : Response.json(profileFailure.body, { status: profileFailure.status });
+      return Response.json({ id: tokenPublisher });
+    }
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     if (url.pathname === "/v1/me/playlists") { marker = body.description; return Response.json({ id: playlistId }, { status: 201 }); }
     if (url.pathname === `/v1/playlists/${playlistId}`) return Response.json({ id: playlistId, public: true, owner: { id: "publisher" }, description: marker, snapshot_id: String(snapshot) });
@@ -50,7 +54,7 @@ async function fixture(discoverPublisher = false) {
     const callback = await fetch(`${first.url}/auth/callback?state=${auth.searchParams.get("state")}&code=code`, { redirect: "manual" });
     return { auth, callback };
   };
-  return { ...first, start, directory, config, headers, request, authorize, calls, tracks: () => tracks, advance: (ms: number) => { now += ms; }, failToken: () => { tokenStatus = 401; }, wrongPublisher: () => { tokenPublisher = "other"; } };
+  return { ...first, start, directory, config, headers, request, authorize, calls, tracks: () => tracks, advance: (ms: number) => { now += ms; }, failToken: () => { tokenStatus = 401; }, wrongPublisher: () => { tokenPublisher = "other"; }, failProfile: (status: number, body: unknown) => { profileFailure = { status, body }; } };
 }
 
 describe("Spotify local HTTP harness", () => {
@@ -148,6 +152,30 @@ describe("Spotify local HTTP harness", () => {
     const resumed = await f.start();
     const status = await fetch(`${resumed.url}/status`, { headers: f.headers });
     expect(await status.json()).toMatchObject({ publisherId: "publisher", appMode: "development", authorized: true });
+  });
+
+  it.each([401, 403, 429, 503])("preserves actual profile failure status %s and safe provider evidence", async status => {
+    const f = await fixture(true);
+    f.failProfile(status, { error: { status, message: "User not registered in the Developer Dashboard", reason: "ACCOUNT_ACCESS" } });
+    const { callback } = await f.authorize();
+    expect(callback.status).toBe(status);
+    expect(await callback.json()).toMatchObject({ error: "publisher_verification_failed", provider: { status, errorStatus: status, message: "User not registered in the Developer Dashboard", reason: "ACCOUNT_ACCESS" } });
+    const current = await f.request("/status", undefined, "GET");
+    expect(await current.json()).toMatchObject({ authorized: false, lastPublisherVerificationFailure: { status } });
+    await expect(readFile(join(f.directory, "tokens.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("redacts credentials from provider failure details and preserves plain-text denial evidence", async () => {
+    const f = await fixture(true);
+    f.failProfile(403, `denied provider-secret refresh-secret ${controlToken} Bearer another-token`);
+    const { callback } = await f.authorize();
+    const body = await callback.text();
+    expect(body).toContain("denied");
+    expect(body).toContain("[redacted]");
+    expect(body).not.toMatch(/provider-secret|refresh-secret|another-token/);
+    expect(body).not.toContain(controlToken);
+    const status = await (await f.request("/status", undefined, "GET")).text();
+    expect(status).not.toMatch(/provider-secret|refresh-secret|another-token/);
   });
 
   it("rejects a second process using the same state directory", async () => {

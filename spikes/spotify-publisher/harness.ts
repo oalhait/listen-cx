@@ -15,6 +15,27 @@ type Config = {
   now?: () => number;
 };
 type Tokens = { accessToken: string; refreshToken: string; expiresAt: number };
+type VerificationFailure = { status: number; errorStatus?: number; message?: string; reason?: string };
+
+async function verificationFailure(response: Response, secrets: string[]): Promise<VerificationFailure> {
+  const redact = (value: unknown) => {
+    if (typeof value !== "string") return undefined;
+    for (const secret of secrets) {
+      if (secret) value = (value as string).split(secret).join("[redacted]").split(encodeURIComponent(secret)).join("[redacted]");
+    }
+    return (value as string).replace(/Bearer\s+\S+/gi, "Bearer [redacted]").replace(/[A-Za-z0-9._~-]{32,}/g, "[redacted]").replace(/[\r\n]/g, " ").slice(0, 400);
+  };
+  const raw = await response.text();
+  let error;
+  try { const body = JSON.parse(raw); error = body?.error ?? body; }
+  catch { error = { message: raw }; }
+  return {
+    status: response.status,
+    errorStatus: typeof error?.status === "number" ? error.status : undefined,
+    message: redact(typeof error === "string" ? error : error?.message),
+    reason: redact(error?.reason),
+  };
+}
 
 async function readJson<T>(path: string): Promise<T | undefined> {
   try { return JSON.parse(await readFile(path, "utf8")) as T; }
@@ -52,6 +73,7 @@ export async function createHarness(config: Config) {
   let origin = "";
   let pending: { state: string; verifier: string; expiresAt: number } | undefined;
   let tokenFlight: Promise<string> | undefined;
+  let lastPublisherVerificationFailure: VerificationFailure | undefined;
   const tokenPath = join(config.stateDirectory, "tokens.json");
   const statePath = join(config.stateDirectory, "destinations.json");
   try {
@@ -132,7 +154,11 @@ export async function createHarness(config: Config) {
           pending = undefined;
           const authorized = await exchange({ grant_type: "authorization_code", code, redirect_uri: config.redirectUri, code_verifier: verifier });
           const profile = await fetcher("https://api.spotify.com/v1/me", { headers: { Authorization: `Bearer ${authorized.accessToken}` }, signal: AbortSignal.timeout(10_000), redirect: "error" });
-          if (!profile.ok) throw new PublishingError("publisher_verification_failed", 403);
+          if (!profile.ok) {
+            lastPublisherVerificationFailure = await verificationFailure(profile, [authorized.accessToken, authorized.refreshToken, config.controlToken, code, state, verifier]);
+            throw new PublishingError("publisher_verification_failed", profile.status);
+          }
+          lastPublisherVerificationFailure = undefined;
           const me = await profile.json() as { id?: string };
           if (typeof me.id !== "string" || !me.id || (binding.publisherId && me.id !== binding.publisherId)) throw new PublishingError("publisher_mismatch", 403);
           if (!binding.publisherId || !binding.appMode) {
@@ -157,7 +183,7 @@ export async function createHarness(config: Config) {
           send(200, { authorizationUrl: authorization.toString() }); return;
         }
         if (request.method === "GET" && url.pathname === "/status") {
-          send(200, { appMode: binding.appMode ?? "unverified", appModeEvidence: "operator-reported", publisherId: binding.publisherId ?? null, candidatePublisherId: candidate?.publisherId ?? null, authorized: Boolean(tokens && binding.publisherId && binding.appMode), destinations: [...rows.values()].map(row => ({ playlistKey: row.desired.playlistKey, revision: row.desired.revision, providerPlaylistId: row.providerPlaylistId, appliedRevision: row.appliedRevision, createUnresolved: row.createUnresolved })) }); return;
+          send(200, { lastPublisherVerificationFailure: lastPublisherVerificationFailure ?? null, appMode: binding.appMode ?? "unverified", appModeEvidence: "operator-reported", publisherId: binding.publisherId ?? null, candidatePublisherId: candidate?.publisherId ?? null, authorized: Boolean(tokens && binding.publisherId && binding.appMode), destinations: [...rows.values()].map(row => ({ playlistKey: row.desired.playlistKey, revision: row.desired.revision, providerPlaylistId: row.providerPlaylistId, appliedRevision: row.appliedRevision, createUnresolved: row.createUnresolved })) }); return;
         }
         if ((request.method === "PUT" && url.pathname === "/desired") || (request.method === "POST" && ["/recover-create", "/auth/confirm"].includes(url.pathname))) {
           let body = "";
@@ -190,7 +216,7 @@ export async function createHarness(config: Config) {
       } catch (error) {
         if (error instanceof PublishingError) {
           if (error.retryAfterSeconds) response.setHeader("Retry-After", String(error.retryAfterSeconds));
-          send(error.status >= 400 && error.status <= 599 ? error.status : 502, { error: error.code });
+          send(error.status >= 400 && error.status <= 599 ? error.status : 502, { error: error.code, ...(error.code === "publisher_verification_failed" ? { provider: lastPublisherVerificationFailure } : {}) });
         } else send(500, { error: "internal_error" });
       }
     });
