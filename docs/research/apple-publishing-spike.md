@@ -15,12 +15,13 @@ Mac Music testing proves playlist creation, public sharing, and an added song ap
 | Authenticated catalog | Existing Doppler `listen-cx` / `dev_personal` Apple developer credentials signed a short-lived ES256 token. Read-only US catalog request returned HTTP 200 and both configured track IDs (2/2). No secret values in this document |
 | Mac Music creation / sharing / addition | **Verified through Apple’s Mac UI and logged-out web**: one disposable playlist, same public URL before and after adding its fourth song |
 | Mac Music removal / reordering | **Not verified**: removal attempts left rows unchanged; reorder automation failed twice with `noWindowsAvailable` |
-| Spike MusicKit user-library readback / edit | **Not run**: no connected physical devices and 0 valid local code-signing identities |
+| Spike MusicKit user-library readback / edit | **Not run**: no discoverable physical device; iOS-on-Mac attempt is blocked by a missing app provisioning profile |
 | Spike app ownership / app-created sharing | **Not run**: the Mac playlist was created by Apple’s Music app, not our publisher |
+| No-cable native route | Xcode exposes the existing iOS app as “Designed for iPad/iPhone” on this Mac; build reaches a missing iOS development provisioning-profile error. MusicKit runtime support on this route remains unverified |
 | Second-account saved-playlist propagation | **Not run**: logged-out web visibility does not demonstrate a saved reference updating for a subscriber |
 | Foreground/background timing | HTTP handoff observed in the foreground; no provider timing measured. No background scheduling implemented or tested |
 
-`xcrun devicectl list devices` returned “No devices found.” `security find-identity -v -p codesigning` returned “0 valid identities found.” The Doppler Apple private key is for developer-token signing, not iOS application signing or Music User Token authorization.
+`xcrun devicectl list devices` still returns “No devices found.” The initial signing check found zero valid identities; the later no-cable investigation found one valid Apple Development identity for Omar. That resolves the missing-certificate finding, but no compatible provisioning profile exists for the spike bundle ID. The Doppler Apple private key remains a separate developer-token credential, not iOS application signing or Music User Token authorization.
 
 ## Mac Music UI experiment
 
@@ -40,7 +41,7 @@ The observed final playlist therefore contains the four songs above. There was n
 
 ## Current Apple constraints
 
-Apple documents native playlist rebuilding through [`MusicLibrary.edit(..., items:)`](https://developer.apple.com/documentation/musickit/musiclibrary/edit(_:name:description:authordisplayname:items:)) and restricts edits to playlists the app created. The installed iPhoneOS 26.2 SDK explicitly marks the creation and edit methods unavailable on macOS and Mac Catalyst. This spike therefore uses an iOS app, not a Mac publisher.
+Apple documents native playlist rebuilding through [`MusicLibrary.edit(..., items:)`](https://developer.apple.com/documentation/musickit/musiclibrary/edit(_:name:description:authordisplayname:items:)) and restricts edits to playlists the app created. The installed iPhoneOS 26.2 SDK explicitly marks the creation and edit methods unavailable on macOS and Mac Catalyst. The spike targets iOS APIs and has no macOS or Mac Catalyst port. Running that iOS binary through “Designed for iPad/iPhone” is a separate candidate, investigated below.
 
 Native MusicKit can manage API tokens after the app's explicit bundle ID enables the [MusicKit App Service](https://developer.apple.com/documentation/musickit/using-automatic-token-generation-for-apple-music-api). The harness uses this mechanism and requests native user consent. It does not copy Doppler private keys into the app.
 
@@ -49,6 +50,59 @@ Readback uses MusicKit's authenticated `MusicDataRequest` against library playli
 Apple describes sharing playlists and updates appearing for followers in its [iPhone sharing guide](https://support.apple.com/en-gb/guide/iphone/iphe5a418a82/ios). That supports the experiment; it does not establish that this app-created playlist can be shared or subscribed to successfully. The app only offers the provider-returned URL when present; it never fabricates a public URL or marks a playlist public. The manual Music app share step is part of acceptance.
 
 [Background notification delivery is not guaranteed](https://developer.apple.com/documentation/usernotifications/pushing-background-updates-to-your-app). This console fetches/publishes only on button presses. It has no background modes, periodic job, push registration, or latency promise. Scene transitions print timestamps for a future device experiment; successful publisher readback reports elapsed time.
+
+## No-cable native execution investigation
+
+The existing app has a possible iOS-on-Mac destination, but there is **no demonstrated no-cable route to actual playlist rebuilding yet**. This investigation made no account changes, portal registrations, MusicKit permission grants, or library mutations.
+
+| Route | Evidence | Current boundary |
+| --- | --- | --- |
+| Previously paired wireless iPhone/iPad | `devicectl` found no devices; `xctrace` listed only this Mac and simulators; Xcode listed no concrete physical iOS destination | No wireless device is currently discoverable. This does not prove that none was ever paired |
+| iOS Simulator | The installed SDK compiles the required signatures, and the app’s HTTP handoff runs. Apple’s [MusicKit library sample](https://developer.apple.com/documentation/musickit/explore-more-content-with-musickit) explicitly does not work in Simulator; its [newer integration sample](https://developer.apple.com/documentation/musickit/integrating-musickit-into-your-app) carries the same restriction | No authenticated MusicKit library execution established. SDK compilation and simulated UI are not provider capability evidence |
+| iOS app on Apple silicon Mac | `xcodebuild -showdestinations` exposes **My Mac**, arm64, variant **Designed for [iPad,iPhone]**, for this unchanged target | Signed build is blocked by the missing app provisioning profile; no launch or native authorization occurred |
+| Native macOS / Mac Catalyst port | The installed SDK marks `MusicLibrary.createPlaylist` and playlist `edit` unavailable for those targets | Not a supported implementation of the required native edit API; no port added |
+
+Apple documents [running an unmodified iOS app natively on Apple silicon](https://developer.apple.com/documentation/apple-silicon/running-your-ios-apps-in-macos). It is not Simulator and does not require recompiling the app as Mac Catalyst. Apple also warns that feature availability must be tested on the actual platform. The shared underlying framework infrastructure, or the presence of the iOS method at compile time, does not establish that playlist rebuilding works in this execution environment. We have not established either success or an API-specific runtime failure there.
+
+### Exact build blocker
+
+The installed Apple Development certificate belongs to team `ZW4CL8J474`. Local provisioning-profile inspection found no profile for `cx.listen.ApplePublisherSpike`; cached profiles belonged to unrelated apps and were expired. No private key material was exported.
+
+The first build against the observed My Mac destination stopped because `DEVELOPMENT_TEAM` was unset. A second build supplied `DEVELOPMENT_TEAM=ZW4CL8J474` only on the command line, without changing project settings or allowing provisioning updates. Xcode then reported:
+
+```text
+No profiles for 'cx.listen.ApplePublisherSpike' were found:
+Xcode couldn't find any iOS App Development provisioning profiles matching 'cx.listen.ApplePublisherSpike'.
+```
+
+Ignored local evidence is in `.local/designed-for-ipad-build.log`, `.local/designed-for-ipad-team-build.log`, and `.local/signing-metadata.json` under the spike directory. The logs retain the exact discovered destination used. This is a signing/setup failure before app launch, not a source compile failure or a MusicKit runtime result.
+
+```sh
+xcodebuild -project spikes/apple-publisher/ApplePublisherSpike.xcodeproj -scheme ApplePublisherSpike -showdestinations
+xcodebuild -project spikes/apple-publisher/ApplePublisherSpike.xcodeproj -scheme ApplePublisherSpike -destination 'platform=macOS,name=My Mac' -derivedDataPath spikes/apple-publisher/.local/DesignedForIPad DEVELOPMENT_TEAM=ZW4CL8J474 build
+```
+
+### Authenticated portal findings
+
+After Omar completed the developer portal sign-in, the account page confirmed team `ZW4CL8J474`. Read-only inspection established:
+
+- The App IDs list does **not** contain `cx.listen.ApplePublisherSpike`.
+- An existing explicit App ID **`listen-cx`** is registered. Its App Services tab has **MusicKit checked**; no checkbox or Save action was changed during inspection.
+- Devices, with All Types selected, contains two older iPhones and **no registered Mac** matching this development destination. The annual device-list review banner is present and Add is inactive; the review has not been completed.
+- Profiles, with All Types and All Platforms selected, contains only an **invalid App Store profile for an unrelated app**. There is no compatible existing development profile to download.
+- Xcode’s existing-team **Download Manual Profiles** action downloaded only an old nonmatching profile; local reinspection still found no usable profile for either the spike bundle or `listen-cx`.
+
+These are portal observations, not conclusions drawn only from missing local files. No App ID, device, profile, service permission, or account was created or modified. No reset/removal flow was entered.
+
+The minimum no-cable setup is now concrete: reuse the existing MusicKit-enabled `listen-cx` bundle ID, retain all current devices through the annual list review, register this Mac for iOS-on-Mac development, then issue and install an iOS development profile covering that bundle, team, certificate, and Mac. The Mac’s provisioning UDID was verified against Xcode’s destination; Apple requires that identifier for [Apple silicon device registration](https://developer.apple.com/help/account/devices/register-a-single-device), rather than its hardware UUID. A local bundle override avoids creating a new App ID; keeping `cx.listen.ApplePublisherSpike` would additionally require registering and enabling that new identifier. Registration and profile creation have not been completed. The portal’s annual device-list review currently disables Add; the next setup action is to inspect that review and preserve every existing device before registering this Mac. No device removal or reset has been submitted.
+
+Once the app can launch, test authorization and read-only subscription/catalog access first; playlist writes remain a separate authorized disposable experiment. Even that read-only success would not prove native create/edit support.
+
+For a physical-device fallback, first try making an already paired, unlocked device available on the same network and selecting it in Xcode. If it was never paired, initial trust/pairing and Developer Mode setup may require a one-time cable connection; that is a future user action, not something performed during this investigation.
+
+### Useful evidence still available without iOS execution
+
+A second subscriber can open the existing Mac-created public playlist in Apple Music on their own Mac, save it there without installing this spike, and later check the saved entry after an authorized publisher edit. Record the original URL and saved entry, track order before/after, refresh behavior, and elapsed time. This can establish saved-reference propagation independently of our app’s execution. No account switching on Omar’s Mac or additional playlist edit was attempted here. Removal/reorder testing remains open; the previously blocked Mac UI automation was not repeated.
 
 ## Files and experimental contract
 
@@ -100,7 +154,7 @@ Test-first evidence: the initial 11-test core suite ran against a throwing stub 
 9. Interrupt a pending edit, relaunch, and submit that identical pending revision before a newer one. Inspect readback and identity. An uncertain create may fence the experiment for manual inspection; never retry under a new key just to hide it. Preserve existing playlists and user data.
 10. Repeat once with the publisher foregrounded, then background or lock it during a pending operation. Record lifecycle timestamps and when progress resumes. Fetching a new server revision while the app is suspended does not schedule any work in this harness. A scheduled/background publisher is a later operational decision, not a result of this experiment.
 
-The Mac experiment established a stable public URL across one addition. Second-account saved-playlist propagation, removal/reorder, duplicate/empty provider semantics, background latency, and our native MusicKit mutation remain unverified. A second account can test the Mac-created shared playlist without an iPhone/iPad. Executing our publisher remains a separate gate requiring an authorized device and this target’s MusicKit-enabled signing identity.
+The Mac experiment established a stable public URL across one addition. Second-account saved-playlist propagation, removal/reorder, duplicate/empty provider semantics, background latency, and our native MusicKit mutation remain unverified. A second account can test the Mac-created shared playlist without an iPhone/iPad. Executing our publisher remains a separate gate requiring a signed, authorized destination. The no-cable iOS-on-Mac candidate above is currently blocked by provisioning and has not established MusicKit edit support.
 
 ## Prepared local device session
 
@@ -123,4 +177,4 @@ cp spikes/apple-publisher/.local/live-experiment/revision-2.json spikes/apple-pu
 
 Copying the file changes the read-only handoff response; only an explicit native Publish action writes the provider playlist. Confirm the publisher storefront before using these prepared IDs. Keep the saved app container and signing identity intact across both revisions.
 
-The target's effective settings are automatic signing, `Apple Development`, and bundle ID `cx.listen.ApplePublisherSpike`, with no configured `DEVELOPMENT_TEAM` or provisioning-profile selection. The default bundle ID's registration/MusicKit App Service status has not been inspected in the developer portal. Existing Doppler API credentials do not establish that registration. Coordinate team/App ID selection before any portal changes.
+The target's effective settings are automatic signing, `Apple Development`, and bundle ID `cx.listen.ApplePublisherSpike`, with no configured `DEVELOPMENT_TEAM` or provisioning-profile selection. Later authenticated portal inspection confirmed that this default bundle ID is absent, while the existing explicit `listen-cx` App ID already has MusicKit enabled. See the no-cable investigation above for the missing Mac registration and development profile. Target settings remain unchanged; coordinate bundle/team selection and provisioning before further signing work.
