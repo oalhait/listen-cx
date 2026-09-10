@@ -3,6 +3,14 @@ import { ItunesClient } from "./itunes.js";
 import { Resolver } from "./resolve.js";
 import { SpotifyClient } from "./spotify.js";
 import { createApp } from "./app.js";
+import { D1JamStore } from "./jam-db.js";
+import {
+  appleMusicConfigFromEnv,
+  createAppleMusicDeveloperToken,
+  type AppleMusicAuthEnv,
+} from "./apple-music-auth.js";
+
+type ListenEnv = Env & AppleMusicAuthEnv;
 
 export function getWorkerBaseUrl(env: { BASE_URL: string }, requestUrl: string): string {
   const request = new URL(requestUrl);
@@ -12,12 +20,43 @@ export function getWorkerBaseUrl(env: { BASE_URL: string }, requestUrl: string):
   return (env.BASE_URL || request.origin).replace(/\/$/, "");
 }
 
+function createAppleMusicIssuer(env: ListenEnv) {
+  const values = [
+    env.APPLE_MUSIC_TEAM_ID,
+    env.APPLE_MUSIC_KEY_ID,
+    env.APPLE_MUSIC_PRIVATE_KEY_P8,
+    env.APPLE_MUSIC_ALLOWED_ORIGINS,
+    env.APPLE_MUSIC_MEDIA_ID,
+  ];
+  if (values.every((value) => !value)) return undefined;
+
+  try {
+    const config = appleMusicConfigFromEnv(env);
+    return {
+      allowedOrigins: config.allowedOrigins,
+      issueDeveloperToken: () => createAppleMusicDeveloperToken(config),
+    };
+  } catch {
+    console.error("Apple Music configuration is invalid.");
+    return undefined;
+  }
+}
+
+export function jamsAreEnabled(value: unknown, requestUrl: string): boolean {
+  const hostname = new URL(requestUrl).hostname;
+  return ["localhost", "127.0.0.1", "[::1]"].includes(hostname)
+    && String(value).trim().toLowerCase() === "true";
+}
+
 export default {
   fetch(request, env) {
     return createApp({
       resolver: new Resolver(new SpotifyClient(), new ItunesClient()),
       store: new D1LinkStore(env.DB),
+      jamStore: new D1JamStore(env.DB, { maxJams: 10_000 }),
+      jamsEnabled: jamsAreEnabled(env.JAMS_ENABLED, request.url),
       baseUrl: getWorkerBaseUrl(env, request.url),
+      appleMusic: createAppleMusicIssuer(env),
     }).fetch(request);
   },
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<ListenEnv>;

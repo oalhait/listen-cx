@@ -1,0 +1,4 @@
+[mcp_servers.listen_cx]
+url = "http://127.0.0.1:8787/mcp"
+tool_timeout_sec = 60
+default_tools_approval_mode = "writes"

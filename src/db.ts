@@ -19,6 +19,7 @@ export interface LinkRow {
 export interface LinkStore {
   get(slug: string): Promise<LinkRow | null>;
   upsert(resolved: Resolved): Promise<LinkRow>;
+  deleteIfUnreferenced(slug: string): Promise<void>;
   isReady(): Promise<boolean>;
 }
 
@@ -64,5 +65,21 @@ export class D1LinkStore implements LinkStore {
   async isReady(): Promise<boolean> {
     const result = await this.db.prepare("SELECT 1 AS ready").first<{ ready: number }>();
     return result?.ready === 1;
+  }
+
+  async deleteIfUnreferenced(slug: string): Promise<void> {
+    const db = this.db.withSession("first-primary");
+    await db
+      .prepare(
+        `DELETE FROM links
+         WHERE slug = ?
+           AND NOT EXISTS (
+             SELECT 1
+             FROM thread_contributions AS contribution
+             WHERE contribution.link_slug = links.slug
+           )`,
+      )
+      .bind(slug)
+      .run();
   }
 }

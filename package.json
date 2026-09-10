@@ -24,8 +24,10 @@
     "test:live": "vitest run --config vitest.live.config.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "hono": "^4.6.16",
-    "nanoid": "^5.0.9"
+    "nanoid": "^5.0.9",
+    "zod": "^4.6.1"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.18.4",

@@ -19,7 +19,8 @@
     }
   ],
   "vars": {
-    "BASE_URL": "https://listen.cx"
+    "BASE_URL": "https://listen.cx",
+    "JAMS_ENABLED": false
   },
   "d1_databases": [
     {
@@ -46,7 +47,8 @@
       "name": "listen-cx-dev",
       "routes": [],
       "vars": {
-        "BASE_URL": ""
+        "BASE_URL": "",
+        "JAMS_ENABLED": false
       },
       "d1_databases": [
         {
@@ -66,7 +68,8 @@
         }
       ],
       "vars": {
-        "BASE_URL": "https://staging.listen.cx"
+        "BASE_URL": "https://staging.listen.cx",
+        "JAMS_ENABLED": false
       },
       "d1_databases": [
         {
