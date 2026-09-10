@@ -12,8 +12,8 @@ The isolated HTTPS staging publisher is deployed and ready for friend OAuth; loc
 | Real loopback HTTP with simulated Spotify responses | 15 passing tests, including OAuth, explicit publisher confirmation, safe failure diagnostics, refresh and process-state restart |
 | Type checks | Spike TypeScript project and root `pnpm typecheck` pass |
 | Actual app mode, Premium and publisher allowlist | Not inspected; configuration is explicitly operator-reported |
-| Staging Worker-runtime contracts | 14 passing tests with simulated provider responses |
-| Actual staging HTTPS security checks | 16 passed; expendable invitation consumed without Spotify token exchange |
+| Staging Worker-runtime contracts | 15 passing tests with simulated provider responses |
+| Actual staging HTTPS security checks | 20 passed after staging callback routing; homepage unchanged |
 | Authenticated Spotify create/update and readback | Pending friend publisher consent and operator confirmation |
 | Listener outside OAuth allowlist saving and observing edits inside Spotify | Not run; second account and app access required |
 
@@ -132,20 +132,20 @@ The harness now returns the real provider status plus bounded, credential-redact
 
 ## Isolated HTTPS staging deployment
 
-Deployed September 9, 2026 at 22:04 PDT (September 10 UTC). The service is [listen-cx-spotify-spike-staging](https://listen-cx-spotify-spike-staging.omar-alhait.workers.dev/health), version `f0ff1c68-f338-4e54-b7ef-461cbd8fff58`. It has its own SQLite Durable Object; it does not import or deploy the website Worker, use the website's D1 database, or modify its domain routes. The local publisher state and harness remain intact.
+Initially deployed September 9, 2026 at 22:04 PDT; updated at 22:34 PDT to reuse the registered staging callback. The service is [listen-cx-spotify-spike-staging](https://listen-cx-spotify-spike-staging.omar-alhait.workers.dev/health), version `0004d982-4aa6-4660-8085-d1705de45ec1`. It has its own SQLite Durable Object. Only the isolated Worker was deployed; the website Worker, D1 database and existing `staging.listen.cx` custom-domain binding were preserved. Three narrow HTTPS routes (`/auth/invite*`, `/auth/start*`, `/auth/callback*`) on `staging.listen.cx` forward the OAuth flow to the spike. Production routes and the production callback were untouched. The local publisher state and harness remain intact.
 
-**Dashboard callback to add and save:**
+**Existing registered dashboard callback now served by the spike:**
 
 ```text
-https://listen-cx-spotify-spike-staging.omar-alhait.workers.dev/auth/callback
+https://staging.listen.cx/auth/callback
 ```
 
 The second local consent attempt established the actual failure: `/me` returned 403 with “The user is not registered for this application.” Omar's account could grant consent but lacked access to the friend's app. We did not broaden scopes speculatively. The remote friend who owns the Premium app can now complete consent on their own machine. The callback uses `id` for comparison with Spotify playlist `owner.id`; this is not a website account-linking system.
 
 ### Friend handoff
 
-1. On the app whose Client ID is configured in Doppler, the friend adds/saves the exact HTTPS callback above and reports the dashboard's actual App Status. Confirm the publisher is allowed to use that app; the existing local 403 demonstrates why consent alone is insufficient.
-2. Once the dashboard is ready, the operator creates a fresh invitation. It expires in ten minutes. GET displays an inert page; chat/mail previews and repeat GETs do not consume it.
+1. The friend reports the dashboard's actual App Status and uses the intended publisher account. The callback above is already reported registered; no new callback entry is needed. The existing local 403 demonstrates why consent alone is insufficient.
+2. The operator creates a fresh invitation on the staging browser origin. It expires in ten minutes. GET displays an inert page; chat/mail previews and repeat GETs do not consume it.
 3. The friend opens the invitation, clicks **Continue with Spotify**, and accepts Spotify consent as the intended publisher. The HTTPS callback works on their own device. Keep using that browser through the redirect.
 4. The operator checks the discovered candidate through the protected status endpoint and confirms the exact candidate ID, publisher ID, and dashboard-observed mode. Publishing stays disabled before that confirmation.
 
@@ -167,7 +167,7 @@ The staging-only operator token and AES-GCM encryption key were generated privat
 | `PUT /control/desired` | Operator bearer; same desired-state contract as the local harness |
 | `POST /control/recover-create` | Operator bearer; same guarded ambiguous-create recovery as local |
 
-The landing page has no scripts or third-party assets. Responses use `no-store`, `no-referrer` and restrictive CSP. Control endpoints provide no CORS grants and reject cross-origin requests. Tokens and PKCE verifiers use authenticated encryption with purpose/client binding before entering durable storage. Candidates, OAuth flows and invitation claims survive instance restarts; callbacks are transactionally consumed before external token exchange. Publisher writes and authorization changes are serialized. Invocation logging and tracing are disabled to avoid capturing OAuth query parameters.
+The landing page has no scripts or third-party assets. Responses use `no-store`, `no-referrer` and restrictive CSP. Browser invitation/start/callback requests must use `https://staging.listen.cx`, so both host cookies remain on the callback host. Controls and health accept only the isolated `workers.dev` origin. Control endpoints provide no CORS grants and reject cross-origin requests; they are not routed through the main staging hostname. Tokens and PKCE verifiers use authenticated encryption with purpose/client binding before entering durable storage. Candidates, OAuth flows and invitation claims survive instance restarts; callbacks are transactionally consumed before external token exchange. Publisher writes and authorization changes are serialized. Invocation logging and tracing are disabled to avoid capturing OAuth query parameters.
 
 To issue an invitation without exposing the operator secret, use a non-logging subprocess and print only the shareable invitation URL:
 
@@ -187,9 +187,9 @@ JS
 
 ### Staging evidence
 
-Fourteen Worker-runtime tests pass with simulated provider responses. They cover operator authentication, missing-secret failure, HTTPS/host/origin constraints, body bounds, preview-safe invitation POST, cookie/state/PKCE binding, replay/expiry, concurrent callbacks, encrypted and tampered storage, explicit confirmation, refresh-token rotation, serialized controls, and durable instance restart with stable playlist reconciliation. Initial contract tests failed against the placeholder Worker; specific security regressions were observed red before fixes. An independent security review of the Worker, config and core publisher found no blocking isolation issue and requested the preview-safe landing flow, which was added and tested before exposure.
+Fifteen Worker-runtime tests pass with simulated provider responses. They cover operator authentication, missing-secret failure, HTTPS/host/origin constraints, body bounds, preview-safe invitation POST, cookie/state/PKCE binding, replay/expiry, concurrent callbacks, encrypted and tampered storage, explicit confirmation, refresh-token rotation, serialized controls, durable instance restart with stable playlist reconciliation, and path-aware browser/operator host isolation. The origin-split regression first failed against the old workers.dev invitation and permissive same-host public endpoints, then passed after the change. Initial contract tests failed against the placeholder Worker; specific security regressions were observed red before fixes. An independent security review of the Worker, config and core publisher found no blocking isolation issue and requested the preview-safe landing flow, which was added and tested before exposure.
 
-Actual HTTPS smoke passed sixteen checks at `2026-09-10T05:05:04Z`: health; unauthorized reads/writes; cross-origin controls; invalid callback/invitation; operator status; expendable invitation creation; repeated preview GET; malicious-origin POST; valid browser-bound redirect; invitation replay; missing browser; denied-consent consumption; callback replay. The smoke never followed the redirect to Spotify and made no provider writes. It consumed its expendable invitation; no friend invitation was issued prematurely. Authenticated provider create/readback and the second-account native Spotify test remain pending.
+Actual HTTPS smoke passed twenty checks at `2026-09-10T05:34:38Z`: health; unauthorized reads/writes; cross-origin controls; invalid callback/invitation; operator status; expendable invitation creation; repeated preview GET; malicious-origin POST; valid browser-bound redirect; invitation replay; missing browser; denied-consent consumption; callback replay; rejection of OAuth on the operator host; and 404 responses for all three wildcard-matched path suffixes. The smoke never followed the redirect to Spotify and made no provider writes. It consumed its expendable invitation. Before/after status and SHA-256 checks confirmed the staging homepage and `/control/status` response were unchanged; the latter remains a main-site 404. A separate fresh friend invitation was issued only after these checks passed. Authenticated provider create/readback and the second-account native Spotify test remain pending.
 
 ```sh
 pnpm exec vitest run --config spikes/spotify-publisher/staging/vitest.config.ts
@@ -208,3 +208,5 @@ pnpm exec wrangler deploy --config spikes/spotify-publisher/staging/wrangler.jso
 The compatibility date matches the repository's verified `2026-07-13` runtime because its installed workerd rejects dates newer than July 15; no root dependency upgrade was introduced. The test pool's global `reset()` intermittently crashed that workerd binary with `Promise callback destroyed itself`. Tests instead clear only the test object's storage between cases, drain HTTP responses, and retain an explicit abort/restart durability test. The Worker passes bounded plain data through RPC, avoiding cross-context response-stream lifetimes.
 
 SQLite Durable Objects are available on Cloudflare's existing plans; no plan purchase or upgrade was made. The staging config uses current declarative class exports and keeps its lifecycle isolated from the removed historical Thread DO. [Cloudflare storage guidance](https://developers.cloudflare.com/durable-objects/), [class exports](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/).
+
+Cloudflare path routes take precedence over a same-host Worker Custom Domain. We verified the existing staging OAuth endpoints returned 404 and coordinated the three reserved paths with the Threads task before adding them. Trailing wildcards are necessary for callback query strings; the application still accepts only the three exact paths and returns 404 for suffixes. [Route matching and precedence](https://developers.cloudflare.com/workers/configuration/routing/routes/).

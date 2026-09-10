@@ -4,24 +4,58 @@
   "main": "worker.ts",
   "account_id": "a353a278b3ec25248a6b5426d7fd1775",
   "compatibility_date": "2026-07-13",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "workers_dev": false,
   "preview_urls": false,
-  "observability": { "enabled": false },
+  "observability": {
+    "enabled": false
+  },
   "env": {
     "staging": {
       "name": "listen-cx-spotify-spike-staging",
       "workers_dev": true,
-      "routes": [],
+      "routes": [
+        {
+          "pattern": "https://staging.listen.cx/auth/invite*",
+          "zone_name": "listen.cx"
+        },
+        {
+          "pattern": "https://staging.listen.cx/auth/start*",
+          "zone_name": "listen.cx"
+        },
+        {
+          "pattern": "https://staging.listen.cx/auth/callback*",
+          "zone_name": "listen.cx"
+        }
+      ],
       "vars": {
         "DEPLOYMENT_STAGE": "staging",
-        "PUBLIC_ORIGIN": "https://listen-cx-spotify-spike-staging.omar-alhait.workers.dev"
+        "PUBLIC_ORIGIN": "https://staging.listen.cx",
+        "CONTROL_ORIGIN": "https://listen-cx-spotify-spike-staging.omar-alhait.workers.dev"
       },
-      "secrets": { "required": ["SPOTIFY_CLIENT_ID", "OPERATOR_TOKEN", "TOKEN_ENCRYPTION_KEY"] },
+      "secrets": {
+        "required": [
+          "SPOTIFY_CLIENT_ID",
+          "OPERATOR_TOKEN",
+          "TOKEN_ENCRYPTION_KEY"
+        ]
+      },
       "durable_objects": {
-        "bindings": [{ "name": "SPOTIFY_STATE", "class_name": "SpotifySpike" }]
+        "bindings": [
+          {
+            "name": "SPOTIFY_STATE",
+            "class_name": "SpotifySpike"
+          }
+        ]
       },
-      "exports": { "SpotifySpike": { "type": "durable-object", "storage": "sqlite" } }
+      "exports": {
+        "SpotifySpike": {
+          "type": "durable-object",
+          "storage": "sqlite"
+        }
+      }
     }
   }
 }

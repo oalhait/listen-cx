@@ -48,8 +48,10 @@ async function input(request: Request): Promise<Record<string, unknown>> {
 function validateRequest(request: Request, env: Cloudflare.Env) {
   if (env.DEPLOYMENT_STAGE !== "staging" || !env.SPOTIFY_CLIENT_ID || (typeof env.OPERATOR_TOKEN !== "string" || env.OPERATOR_TOKEN.length < 32) || !/^[a-f0-9]{64}$/i.test(env.TOKEN_ENCRYPTION_KEY ?? "")) throw new PublishingError("staging_not_configured", 503);
   const url = new URL(request.url);
-  if (url.protocol !== "https:" || url.origin !== env.PUBLIC_ORIGIN) throw new PublishingError("invalid_origin", 400);
-  if (request.headers.has("origin") && request.headers.get("origin") !== env.PUBLIC_ORIGIN) throw new PublishingError("forbidden_origin", 403);
+  const browserPath = ["/auth/invite", "/auth/start", "/auth/callback"].some(path => url.pathname.startsWith(path));
+  const expectedOrigin = browserPath ? env.PUBLIC_ORIGIN : env.CONTROL_ORIGIN;
+  if (url.protocol !== "https:" || url.origin !== expectedOrigin) throw new PublishingError("invalid_origin", 400);
+  if (request.headers.has("origin") && request.headers.get("origin") !== expectedOrigin) throw new PublishingError("forbidden_origin", 403);
   if (url.pathname.startsWith("/control/")) {
     const actual = Buffer.from(request.headers.get("authorization") ?? "");
     const expected = Buffer.from(`Bearer ${env.OPERATOR_TOKEN}`);

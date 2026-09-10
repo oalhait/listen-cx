@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 declare module "cloudflare:test" { interface ProvidedEnv extends Cloudflare.Env {} }
 const origin = "https://listen-cx-spotify-spike-staging.omar-alhait.workers.dev";
+const browserOrigin = "https://staging.listen.cx";
 const control = { Authorization: `Bearer ${"test-operator-".repeat(4)}`, "Content-Type": "application/json" };
 const A = "A".repeat(22), B = "B".repeat(22), C = "C".repeat(22), D = "D".repeat(22), P = "P".repeat(22);
 const http = async (url: string, init?: RequestInit) => {
@@ -24,7 +25,9 @@ afterEach(() => { vi.unstubAllGlobals(); });
 async function invite() {
   const response = await request("/control/invitations");
   expect(response.status).toBe(201);
-  return await response.json<{ inviteUrl: string; expiresAt: number }>();
+  const invitation = await response.json<{ inviteUrl: string; expiresAt: number }>();
+  expect(new URL(invitation.inviteUrl).origin).toBe(browserOrigin);
+  return invitation;
 }
 async function begin() {
   const invitation = await invite();
@@ -32,14 +35,14 @@ async function begin() {
   expect(landing.status).toBe(200);
   const html = await landing.text();
   const csrf = html.match(/name="csrf" value="([a-f0-9]+)"/)![1]!;
-  const response = await http(origin + "/auth/start", {
-    method: "POST", redirect: "manual", headers: { Origin: origin, Cookie: landing.headers.get("set-cookie")!.split(";")[0]!, "Content-Type": "application/x-www-form-urlencoded" },
+  const response = await http(browserOrigin + "/auth/start", {
+    method: "POST", redirect: "manual", headers: { Origin: browserOrigin, Cookie: landing.headers.get("set-cookie")!.split(";")[0]!, "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ csrf, ticket: new URL(invitation.inviteUrl).searchParams.get("ticket")! }).toString(),
   });
   expect(response.status).toBe(302);
   const location = new URL(response.headers.get("location")!);
   const cookie = response.headers.get("set-cookie")!.split(";")[0]!;
-  return { invitation, response, location, cookie, callback: `${origin}/auth/callback?code=consent-code&state=${location.searchParams.get("state")}` };
+  return { invitation, response, location, cookie, callback: `${browserOrigin}/auth/callback?code=consent-code&state=${location.searchParams.get("state")}` };
 }
 function providerAuth(status = 200, expiresIn = 3600) {
   providerHandler = (url) => {
@@ -100,10 +103,10 @@ describe("isolated Spotify staging security and HTTP", () => {
     expect(flow.response.headers.get("set-cookie")).toMatch(/HttpOnly; Secure; SameSite=Lax/);
     expect(flow.response.headers.get("referrer-policy")).toBe("no-referrer");
     expect(flow.location.origin).toBe("https://accounts.spotify.com");
-    expect(flow.location.searchParams.get("redirect_uri")).toBe(origin + "/auth/callback");
+    expect(flow.location.searchParams.get("redirect_uri")).toBe(browserOrigin + "/auth/callback");
     expect(flow.location.searchParams.get("code_challenge_method")).toBe("S256");
     expect((await http(flow.invitation.inviteUrl, { redirect: "manual" })).status).toBe(400);
-    expect((await http(origin + "/auth/invite?ticket=guessed", { redirect: "manual" })).status).toBe(400);
+    expect((await http(browserOrigin + "/auth/invite?ticket=guessed", { redirect: "manual" })).status).toBe(400);
   });
 
   it("requires browser cookie and OAuth state and consumes callback only once", async () => {
@@ -243,11 +246,29 @@ describe("isolated Spotify staging security and HTTP", () => {
     const ticket = new URL(invitation.inviteUrl).searchParams.get("ticket")!;
     const cookie = landing.headers.get("set-cookie")!.split(";")[0]!;
     const form = new URLSearchParams({ ticket, csrf }).toString();
-    const post = (browserOrigin: string, browserCookie = cookie) => http(origin + "/auth/start", { method: "POST", headers: { Origin: browserOrigin, Cookie: browserCookie, "Content-Type": "application/x-www-form-urlencoded" }, body: form, redirect: "manual" });
+    const post = (requestOrigin: string, browserCookie = cookie) => http(browserOrigin + "/auth/start", { method: "POST", headers: { Origin: requestOrigin, Cookie: browserCookie, "Content-Type": "application/x-www-form-urlencoded" }, body: form, redirect: "manual" });
     expect((await post("https://attacker.example")).status).toBe(403);
-    expect((await post(origin, "")).status).toBe(400);
-    expect((await post(origin)).status).toBe(302);
-    expect((await post(origin)).status).toBe(400);
+    expect((await post(browserOrigin, "")).status).toBe(400);
+    expect((await post(browserOrigin)).status).toBe(302);
+    expect((await post(browserOrigin)).status).toBe(400);
+  });
+
+  it("accepts browser OAuth only on staging and operator endpoints only on their isolated host", async () => {
+    for (const path of ["/auth/invite?ticket=guessed", "/auth/start", "/auth/callback?state=guessed"]) {
+      const response = await http(origin + path, { method: path === "/auth/start" ? "POST" : "GET" });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: "invalid_origin" });
+    }
+    for (const path of ["/control/status", "/health"]) {
+      const response = await http(browserOrigin + path, { headers: control });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: "invalid_origin" });
+    }
+    const response = await request("/control/invitations", undefined, "POST", { ...control, Origin: browserOrigin });
+    expect(response.status).toBe(403);
+    for (const path of ["/auth/invite-unrelated", "/auth/start-unrelated", "/auth/callback-unrelated"]) {
+      expect((await http(browserOrigin + path)).status).toBe(404);
+    }
   });
 
 });
