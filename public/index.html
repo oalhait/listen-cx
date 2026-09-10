@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#fafafa">
-  <meta name="description" content="Share songs and albums across Spotify and Apple Music with one link.">
+  <meta name="description" content="Share a track with its original link and search the other music app.">
   <title>listen.cx — Share music across apps</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700&amp;display=swap">
   <link rel="preload" href="/fonts/exposure-trial-variable.ttf" as="font" type="font/ttf" crossorigin>
   <link rel="stylesheet" href="/styles.css">
-  <script src="/app.js" defer></script>
+  <script src="/app.js" type="module"></script>
 </head>
 <body>
   <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -33,26 +33,29 @@
     <main id="main">
       <section class="hero" aria-labelledby="hero-title">
         <h1 id="hero-title">Share music<br>across apps</h1>
-        <p class="hero-description">One link for Spotify, Apple Music, and more.</p>
+        <p class="hero-description">Share a track. Open the original or search the other app.</p>
         <div class="generator" id="share">
           <form id="link-form" novalidate>
-            <label class="sr-only" for="music-url">Song or album link</label>
-            <div class="input-wrap"><input id="music-url" name="url" type="url" placeholder="Paste a song or album link…" autocomplete="off" spellcheck="false" aria-describedby="form-message"><button class="generate-button" type="submit"><span>Make a link</span><svg class="icon"><use href="#arrow"/></svg></button></div>
+            <label class="sr-only" for="music-url">Spotify or Apple Music track link</label>
+            <div class="input-wrap"><input id="music-url" name="url" type="url" placeholder="Paste a Spotify or Apple Music track link…" autocomplete="off" spellcheck="false" aria-describedby="form-message"><button class="generate-button" type="submit"><span>Make a link</span><svg class="icon"><use href="#arrow"/></svg></button></div>
           </form>
-          <div class="link-result" id="link-result" hidden><div><span class="preview-tag">Preview</span><strong>listen.cx/your-song</strong></div><button id="reset-link" type="button" aria-label="Try another music link">Try another <span aria-hidden="true">↺</span></button></div>
-          <p class="form-message" id="form-message" role="status"></p>
+          <div class="link-result" id="link-result" hidden>
+            <div class="result-track"><img id="result-artwork" width="52" height="52" alt="" hidden><div class="track-meta"><strong id="result-title"></strong><span id="result-artist"></span></div></div>
+            <div class="result-actions"><a id="short-link" href="/" aria-label="Open your shared track"></a><div><button id="copy-link" type="button">Copy link</button><button id="reset-link" type="button">Try another <span aria-hidden="true">↺</span></button></div></div>
+          </div>
+          <p class="form-message" id="form-message" role="status">Direct track links only. Albums and spotify.link are not supported yet.</p>
         </div>
       </section>
 
       <section class="how-section" id="how-it-works" aria-labelledby="how-title">
-        <div class="section-caption"><span class="section-title" id="how-title">How it works</span><button class="text-button" id="try-example" type="button">Try an example <svg class="icon"><use href="#arrow"/></svg></button></div>
+        <div class="section-caption"><span class="section-title" id="how-title">How it works · Example</span><button class="text-button" id="try-example" type="button">Try an example <svg class="icon"><use href="#arrow"/></svg></button></div>
         <div class="sharing-demo">
           <div class="source-preview">
-            <div class="album-stack"><img class="album album-back" src="/images/in-rainbows.jpg" alt="" width="184" height="184"><img class="album album-middle" src="/images/blonde.jpg" alt="" width="184" height="184"><img class="album album-front" src="/images/this-thing-of-ours.jpg" alt="This Thing of Ours album artwork by The Alchemist" width="184" height="184"><span class="album-provider"><svg class="icon"><use href="#spotify"/></svg></span></div>
-            <div class="track-meta"><strong>This Thing of Ours</strong><span>The Alchemist <span aria-hidden="true">·</span> Album</span></div>
+            <div class="album-stack"><img class="album album-back" src="/images/in-rainbows.jpg" alt="" width="184" height="184"><img class="album album-middle" src="/images/blonde.jpg" alt="" width="184" height="184"><img class="album album-front" src="/images/this-thing-of-ours.jpg" alt="Illustrative album artwork" width="184" height="184"><span class="album-provider"><svg class="icon"><use href="#spotify"/></svg></span></div>
+            <div class="track-meta"><strong>Cataracts</strong><span>Freddie Gibbs, Madlib <span aria-hidden="true">·</span> Track</span></div>
           </div>
           <div class="link-bridge"><div class="bridge-line" aria-hidden="true"></div><div class="shared-link"><svg class="icon"><use href="#wave"/></svg><span>listen.cx/<strong>ttours</strong></span></div></div>
-          <div class="receiver-card"><h2>Where do you listen?</h2><div class="provider-choices" role="group" aria-label="Preview your preferred music app"><button type="button" class="provider-choice" data-provider="Spotify" aria-pressed="false"><svg class="icon spotify-icon"><use href="#spotify"/></svg><span>Spotify</span><svg class="icon choice-arrow"><use href="#arrow"/></svg></button><button type="button" class="provider-choice" data-provider="Apple Music" aria-pressed="false"><svg class="icon apple-icon"><use href="#music"/></svg><span>Apple Music</span><svg class="icon choice-arrow"><use href="#arrow"/></svg></button></div><p class="preference-note" id="preference-note" role="status"></p></div>
+          <div class="receiver-card"><h2>Where do you listen?</h2><div class="provider-choices" role="group" aria-label="Preview your preferred music app"><button type="button" class="provider-choice" data-provider="Spotify" aria-pressed="false"><svg class="icon spotify-icon"><use href="#spotify"/></svg><span>Open in Spotify</span><svg class="icon choice-arrow"><use href="#arrow"/></svg></button><button type="button" class="provider-choice" data-provider="Apple Music" aria-pressed="false"><svg class="icon apple-icon"><use href="#music"/></svg><span>Search Apple Music</span><svg class="icon choice-arrow"><use href="#arrow"/></svg></button></div><p class="preference-note" id="preference-note" role="status">Original track or search results. No saved app preference.</p></div>
         </div>
       </section>
 

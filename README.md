@@ -1,16 +1,13 @@
 # listen.cx
 
-A small TypeScript backend for Spotify and Apple Music track metadata and stored
-short links. The previous web UI, threads, push notifications, Raycast extension,
-playlist experiments, and fuzzy cross-provider matching have been removed.
+A TypeScript Worker for Spotify and Apple Music track metadata, stored short
+links, and a small web frontend. Paste a direct track link at `/` to create a
+shareable URL with its real title, artist, and artwork. Albums and `spotify.link`
+short URLs are not supported. Apple album URLs must include a track's `?i=` ID.
 
-A minimal landing-page prototype now lives in `public/` and is served at `/` by
-Wrangler static assets. It includes a demo link input and music-app chooser.
-The demo makes no API calls and does not generate live links or save preferences.
-Cross-platform Jams are presented as coming soon.
-
-Run `pnpm dev` and open the printed local URL to preview it. Database migrations
-are needed for API development, but not for the landing page.
+The recipient page opens the original provider URL and offers a clearly labeled
+search on the other app. Cross-platform Jams remain coming soon; publishing
+spikes are disconnected from the web app. No app preference is saved.
 
 ## Run locally
 
@@ -26,7 +23,11 @@ pnpm dev
 - `POST /create` accepts JSON `{ "url": "<Spotify or Apple Music track URL>" }`.
   Returns `{ link, slug, title, artist, artworkUrl }`. Requests are limited to 4 KiB.
 - `GET /:slug` returns the stored row as JSON, including `spotify_url` and
-  `apple_url`. It does not contact providers, render HTML, or redirect.
+  `apple_url`, by default and for `Accept: application/json`. Explicitly requesting
+  `text/html` with a higher quality than JSON (including wildcard quality) returns
+  the recipient page instead. Ties select JSON; `*/*` alone stays JSON. Responses
+  include `Vary: Accept`. Missing slugs use the same negotiation with status 404.
+  Reading a link does not contact providers or redirect automatically.
 
 New rows contain only the source provider's URL. The opposite provider URL is
 null. Every creation gets a new seven-character slug. Invalid inputs return 400,
@@ -46,7 +47,9 @@ curl http://localhost:8787/create \
 - `src/itunes.ts`: Apple lookup, catalog search, and public-page metadata fallback.
 - `src/fetch.ts`: bounded retries and per-attempt timeouts.
 - `src/resolve.ts`: source-provider metadata only; no match guessing.
-- `src/db.ts`, `src/app.ts`, `src/worker.ts`: D1 storage and JSON API.
+- `src/db.ts`, `src/app.ts`, `src/worker.ts`: D1 storage and API.
+- `src/recipient.ts`: negotiated recipient HTML with escaped metadata.
+- `public/`: landing page, create controller, and shared visual styles.
 
 `ItunesClient.searchTracks` returns catalog candidates. It does not establish
 that a result matches a recording on another provider. Spotify metadata and the
@@ -73,10 +76,13 @@ One initial Spotify request timed out; the next live run passed.
 This restart has not been deployed. Historical D1 migrations remain unchanged;
 no remote data has been deleted. Existing rows retain their original values,
 including any old inferred cross-provider URLs. Those values have not been
-reverified, and the API does not certify them as matches.
+reverified, and the API does not certify them as matches. When both URLs are
+present, the recipient page cannot identify the original source and offers only
+provider searches, regardless of the historical `complete` flag. It ignores
+invalid provider URLs. Existing JSON rows and D1 migrations remain unchanged.
 
 The Worker no longer exports the old Thread Durable Object. Deploying over an
 existing installation requires a deliberate Durable Object migration decision
 first; this change does not schedule deletion of its stored data. Production
-commands must be run by Omar. A deployment also changes short links from the old
-receiver UI to JSON, so existing consumers must be considered before release.
+commands must be run by Omar. Browser requests now receive recipient HTML; JSON
+consumers retain the stored-row contract described above.

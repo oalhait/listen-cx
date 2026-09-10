@@ -28,6 +28,27 @@ describe("short-link API", () => {
     expect(resolve).toHaveBeenCalledTimes(1);
   });
 
+  it("serves browser HTML and varies by Accept while preserving explicit and default JSON", async () => {
+    const row = await store.upsert(track);
+    for (const accept of [undefined, "*/*", "application/json", "text/html;q=.5, application/json"]) {
+      const response = await app.request(`/${row.slug}`, { headers: accept ? { Accept: accept } : {} });
+      expect(response.headers.get("Vary")).toBe("Accept");
+      expect(await response.json()).toEqual(row);
+    }
+    const response = await app.request(`/${row.slug}`, { headers: { Accept: "text/html" } });
+    expect(response.headers.get("content-type")).toContain("text/html");
+    expect(response.headers.get("Vary")).toBe("Accept");
+    expect(await response.text()).toContain("Open in Spotify");
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it.each(["/missing", "/zzzzzzz"])("returns an HTML 404 for a browser at %s", async (path) => {
+    const response = await app.request(path, { headers: { Accept: "text/html" } });
+    expect(response.status).toBe(404);
+    expect(response.headers.get("Vary")).toBe("Accept");
+    expect(await response.text()).toContain("Link not found");
+  });
+
   it("keeps partial rows immutable and allocates a fresh slug on each creation", async () => {
     const first = await store.upsert(track);
     const second = await store.upsert({ ...track, title: "Another title" });
@@ -35,7 +56,7 @@ describe("short-link API", () => {
     expect(await store.get(first.slug)).toEqual(first);
   });
 
-  it.each([null, [], {}, { url: 1 }, { url: "https://example.com/song" }])("rejects invalid input %j before provider access", async (body) => {
+  it.each([null, [], {}, { url: 1 }, { url: "https://example.com/song" }, { url: "https://spotify.link/example" }, { url: "https://music.apple.com/us/album/this-thing-of-ours/1562919023" }, { url: "https://open.spotify.com/album/4SN5Kkig8iJ8vdwsOoP7IO" }])("rejects invalid input %j before provider access", async (body) => {
     expect((await create(body)).status).toBe(400);
     expect(resolve).not.toHaveBeenCalled();
   });
@@ -60,7 +81,7 @@ describe("short-link API", () => {
     expect(await response.json()).toEqual({ error: "Internal server error." });
   });
 
-  it.each(["/", "/missing", "/threads/new", "/api/threads"])("serves no UI at %s", async (path) => {
+  it.each(["/", "/missing", "/threads/new", "/api/threads"])("keeps unknown API paths as JSON at %s", async (path) => {
     const response = await app.request(path);
     expect(response.status).toBe(404);
     expect(response.headers.get("content-type")).toContain("application/json");

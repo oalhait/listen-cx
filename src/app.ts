@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { Resolver } from "./resolve.js";
 import type { LinkStore } from "./db.js";
+import { prefersHtml, renderRecipient } from "./recipient.js";
 import { parseTrackUrl } from "./urls.js";
 
 const MAX_CREATE_BODY_BYTES = 4096;
@@ -94,13 +95,15 @@ export function createApp({ resolver, store, baseUrl }: {
   });
 
   app.get("/:slug", async (c) => {
+    c.header("Vary", "Accept");
+    const html = prefersHtml(c.req.header("Accept") ?? null);
     const slug = c.req.param("slug");
     if (!/^[23456789abcdefghjkmnpqrstuvwxyz]{7}$/.test(slug)) {
-      return c.json({ error: "Not found." }, 404);
+      return html ? c.html(renderRecipient(null), 404) : c.json({ error: "Not found." }, 404);
     }
     const row = await store.get(slug);
-    if (!row) return c.json({ error: "Not found." }, 404);
-    return c.json(row);
+    if (!row) return html ? c.html(renderRecipient(null), 404) : c.json({ error: "Not found." }, 404);
+    return html ? c.html(renderRecipient(row)) : c.json(row);
   });
 
   return app;
