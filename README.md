@@ -1,8 +1,16 @@
-# listen.cx primitives
+# listen.cx
 
 A small TypeScript backend for Spotify and Apple Music track metadata and stored
 short links. The previous web UI, threads, push notifications, Raycast extension,
 playlist experiments, and fuzzy cross-provider matching have been removed.
+
+A minimal landing-page prototype now lives in `public/` and is served at `/` by
+Wrangler static assets. It includes a demo link input and music-app chooser.
+The demo makes no API calls and does not generate live links or save preferences.
+Cross-platform Jams are presented as coming soon.
+
+Run `pnpm dev` and open the printed local URL to preview it. Database migrations
+are needed for API development, but not for the landing page.
 
 ## Run locally
 

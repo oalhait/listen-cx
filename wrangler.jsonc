@@ -2,6 +2,9 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "listen-cx",
   "main": "src/worker.ts",
+  "assets": {
+    "directory": "./public"
+  },
   "account_id": "a353a278b3ec25248a6b5426d7fd1775",
   "compatibility_date": "2026-07-13",
   "compatibility_flags": [

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#fafafa">
+  <meta name="description" content="Share songs and albums across Spotify and Apple Music with one link.">
+  <title>listen.cx — Share music across apps</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700&amp;display=swap">
+  <link rel="preload" href="/fonts/exposure-trial-variable.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="wave" viewBox="0 0 28 28"><path d="M4 12v4m5-9v14m5-18v22m5-18v14m5-9v4" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></symbol>
+    <symbol id="arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="link" viewBox="0 0 24 24"><path d="m10 14 4-4m-6 5-1 1a4.2 4.2 0 0 1-6-6l4-4a4.2 4.2 0 0 1 6 0m2 3 1-1a4.2 4.2 0 0 1 6 6l-4 4a4.2 4.2 0 0 1-6 0" transform="translate(1 0)" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="spotify" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="currentColor"/><g fill="none" stroke="var(--spotify-lines, #fafafa)" stroke-linecap="round"><path d="M5.5 9c4.6-1.5 9-1.1 13 1" stroke-width="1.8"/><path d="M6.5 12.3c3.8-1.2 7.6-.8 10.8.9" stroke-width="1.6"/><path d="M7.4 15.5c3-.8 5.7-.5 8.2.7" stroke-width="1.5"/></g></symbol>
+    <symbol id="music" viewBox="0 0 24 24"><path d="M9 5v12.2c0 1.6-1.7 2.8-3.5 2.8C4 20 3 19.2 3 18s1.4-2.4 3.1-2.4c.6 0 1.1.1 1.5.2V5L21 2v12.2c0 1.6-1.7 2.8-3.5 2.8-1.5 0-2.5-.8-2.5-2s1.4-2.4 3.1-2.4c.6 0 1.1.1 1.5.2V6.1L9 8.5Z" fill="currentColor"/></symbol>
+    <symbol id="check" viewBox="0 0 24 24"><path d="m6 12 4 4 8-8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  </defs></svg>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="page-shell">
+    <header class="header">
+      <a class="wordmark" href="/" aria-label="listen.cx home"><svg class="brand-icon"><use href="#wave"/></svg><span>listen<span class="domain">.cx</span></span></a>
+      <nav aria-label="Main navigation"><a href="#jams"><span class="jam-symbol" aria-hidden="true"><svg class="icon"><use href="#wave"/></svg><svg class="icon"><use href="#wave"/></svg></span>Jams <span class="soon">Soon</span></a></nav>
+    </header>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <h1 id="hero-title">Share music<br>across apps</h1>
+        <p class="hero-description">One link for Spotify, Apple Music, and more.</p>
+        <div class="generator" id="share">
+          <form id="link-form" novalidate>
+            <label class="sr-only" for="music-url">Song or album link</label>
+            <div class="input-wrap"><input id="music-url" name="url" type="url" placeholder="Paste a song or album link…" autocomplete="off" spellcheck="false" aria-describedby="form-message"><button class="generate-button" type="submit"><span>Make a link</span><svg class="icon"><use href="#arrow"/></svg></button></div>
+          </form>
+          <div class="link-result" id="link-result" hidden><div><span class="preview-tag">Preview</span><strong>listen.cx/your-song</strong></div><button id="reset-link" type="button" aria-label="Try another music link">Try another <span aria-hidden="true">↺</span></button></div>
+          <p class="form-message" id="form-message" role="status"></p>
+        </div>
+      </section>
+
+      <section class="how-section" id="how-it-works" aria-labelledby="how-title">
+        <div class="section-caption"><span class="section-title" id="how-title">How it works</span><button class="text-button" id="try-example" type="button">Try an example <svg class="icon"><use href="#arrow"/></svg></button></div>
+        <div class="sharing-demo">
+          <div class="source-preview">
+            <div class="album-stack"><img class="album album-back" src="/images/in-rainbows.jpg" alt="" width="184" height="184"><img class="album album-middle" src="/images/blonde.jpg" alt="" width="184" height="184"><img class="album album-front" src="/images/this-thing-of-ours.jpg" alt="This Thing of Ours album artwork by The Alchemist" width="184" height="184"><span class="album-provider"><svg class="icon"><use href="#spotify"/></svg></span></div>
+            <div class="track-meta"><strong>This Thing of Ours</strong><span>The Alchemist <span aria-hidden="true">·</span> Album</span></div>
+          </div>
+          <div class="link-bridge"><div class="bridge-line" aria-hidden="true"></div><div class="shared-link"><svg class="icon"><use href="#wave"/></svg><span>listen.cx/<strong>ttours</strong></span></div></div>
+          <div class="receiver-card"><h2>Where do you listen?</h2><div class="provider-choices" role="group" aria-label="Preview your preferred music app"><button type="button" class="provider-choice" data-provider="Spotify" aria-pressed="false"><svg class="icon spotify-icon"><use href="#spotify"/></svg><span>Spotify</span><svg class="icon choice-arrow"><use href="#arrow"/></svg></button><button type="button" class="provider-choice" data-provider="Apple Music" aria-pressed="false"><svg class="icon apple-icon"><use href="#music"/></svg><span>Apple Music</span><svg class="icon choice-arrow"><use href="#arrow"/></svg></button></div><p class="preference-note" id="preference-note" role="status"></p></div>
+        </div>
+      </section>
+
+      <section class="jams-section" id="jams" aria-labelledby="jams-title">
+        <div class="jams-title"><span class="jam-symbol" aria-hidden="true"><svg class="icon"><use href="#wave"/></svg><svg class="icon"><use href="#wave"/></svg></span><div><div class="jam-label"><h2 id="jams-title">Jams</h2><span class="soon">Soon</span></div><p>Listen together across music apps.</p></div></div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
