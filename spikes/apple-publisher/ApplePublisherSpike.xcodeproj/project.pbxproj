@@ -1,0 +1,169 @@
+// !$*UTF8*$!
+{
+"archiveVersion" = 1;
+"classes" = {
+
+};
+"objectVersion" = 56;
+"objects" = {
+"00000000000000000000000A" = {
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "sourcecode.swift";
+"path" = "Core/Publisher.swift";
+"sourceTree" = "<group>";
+};
+"000000000000000000000014" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "00000000000000000000000A";
+};
+"00000000000000000000000B" = {
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "sourcecode.swift";
+"path" = "Native/MusicKitProvider.swift";
+"sourceTree" = "<group>";
+};
+"000000000000000000000015" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "00000000000000000000000B";
+};
+"00000000000000000000000C" = {
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "sourcecode.swift";
+"path" = "Native/SpikeApp.swift";
+"sourceTree" = "<group>";
+};
+"000000000000000000000016" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "00000000000000000000000C";
+};
+"00000000000000000000001E" = {
+"isa" = "PBXFileReference";
+"explicitFileType" = "wrapper.application";
+"path" = "ApplePublisherSpike.app";
+"sourceTree" = "BUILT_PRODUCTS_DIR";
+};
+"00000000000000000000001F" = {
+"isa" = "PBXGroup";
+"children" = ("00000000000000000000001E");
+"name" = "Products";
+"sourceTree" = "<group>";
+};
+"000000000000000000000020" = {
+"isa" = "PBXGroup";
+"children" = ("00000000000000000000000A","00000000000000000000000B","00000000000000000000000C","00000000000000000000001F");
+"sourceTree" = "<group>";
+};
+"000000000000000000000021" = {
+"isa" = "PBXSourcesBuildPhase";
+"buildActionMask" = 2147483647;
+"files" = ("000000000000000000000014","000000000000000000000015","000000000000000000000016");
+"runOnlyForDeploymentPostprocessing" = 0;
+};
+"000000000000000000000022" = {
+"isa" = "PBXFrameworksBuildPhase";
+"buildActionMask" = 2147483647;
+"files" = ();
+"runOnlyForDeploymentPostprocessing" = 0;
+};
+"000000000000000000000023" = {
+"isa" = "PBXResourcesBuildPhase";
+"buildActionMask" = 2147483647;
+"files" = ();
+"runOnlyForDeploymentPostprocessing" = 0;
+};
+"000000000000000000000028" = {
+"isa" = "XCBuildConfiguration";
+"name" = "Debug";
+"buildSettings" = {
+"ALWAYS_SEARCH_USER_PATHS" = "NO";
+"SDKROOT" = "iphoneos";
+"IPHONEOS_DEPLOYMENT_TARGET" = "16.0";
+"SWIFT_VERSION" = "6.0";
+"PRODUCT_BUNDLE_IDENTIFIER" = "cx.listen.ApplePublisherSpike";
+"PRODUCT_NAME" = "$(TARGET_NAME)";
+"INFOPLIST_FILE" = "Native/Info.plist";
+"TARGETED_DEVICE_FAMILY" = "1,2";
+"CODE_SIGN_STYLE" = "Automatic";
+"SUPPORTED_PLATFORMS" = "iphoneos iphonesimulator";
+"SUPPORTS_MACCATALYST" = "NO";
+"SWIFT_STRICT_CONCURRENCY" = "complete";
+"SWIFT_OPTIMIZATION_LEVEL" = "-Onone";
+"DEBUG_INFORMATION_FORMAT" = "dwarf";
+"ENABLE_TESTABILITY" = "YES";
+};
+};
+"000000000000000000000029" = {
+"isa" = "XCBuildConfiguration";
+"name" = "Release";
+"buildSettings" = {
+"ALWAYS_SEARCH_USER_PATHS" = "NO";
+"SDKROOT" = "iphoneos";
+"IPHONEOS_DEPLOYMENT_TARGET" = "16.0";
+"SWIFT_VERSION" = "6.0";
+"PRODUCT_BUNDLE_IDENTIFIER" = "cx.listen.ApplePublisherSpike";
+"PRODUCT_NAME" = "$(TARGET_NAME)";
+"INFOPLIST_FILE" = "Native/Info.plist";
+"TARGETED_DEVICE_FAMILY" = "1,2";
+"CODE_SIGN_STYLE" = "Automatic";
+"SUPPORTED_PLATFORMS" = "iphoneos iphonesimulator";
+"SUPPORTS_MACCATALYST" = "NO";
+"SWIFT_STRICT_CONCURRENCY" = "complete";
+"SWIFT_OPTIMIZATION_LEVEL" = "-O";
+};
+};
+"00000000000000000000002A" = {
+"isa" = "XCConfigurationList";
+"buildConfigurations" = ("000000000000000000000028","000000000000000000000029");
+"defaultConfigurationIsVisible" = 0;
+"defaultConfigurationName" = "Debug";
+};
+"00000000000000000000002B" = {
+"isa" = "XCBuildConfiguration";
+"name" = "Debug";
+"buildSettings" = {
+
+};
+};
+"00000000000000000000002C" = {
+"isa" = "XCBuildConfiguration";
+"name" = "Release";
+"buildSettings" = {
+
+};
+};
+"00000000000000000000002D" = {
+"isa" = "XCConfigurationList";
+"buildConfigurations" = ("00000000000000000000002B","00000000000000000000002C");
+"defaultConfigurationIsVisible" = 0;
+"defaultConfigurationName" = "Debug";
+};
+"000000000000000000000032" = {
+"isa" = "PBXNativeTarget";
+"buildConfigurationList" = "00000000000000000000002A";
+"buildPhases" = ("000000000000000000000021","000000000000000000000022","000000000000000000000023");
+"buildRules" = ();
+"dependencies" = ();
+"name" = "ApplePublisherSpike";
+"productName" = "ApplePublisherSpike";
+"productReference" = "00000000000000000000001E";
+"productType" = "com.apple.product-type.application";
+};
+"000000000000000000000001" = {
+"isa" = "PBXProject";
+"attributes" = {
+"LastUpgradeCheck" = "2620";
+};
+"buildConfigurationList" = "00000000000000000000002D";
+"compatibilityVersion" = "Xcode 14.0";
+"developmentRegion" = "en";
+"hasScannedForEncodings" = 0;
+"knownRegions" = ("en","Base");
+"mainGroup" = "000000000000000000000020";
+"productRefGroup" = "00000000000000000000001F";
+"projectDirPath" = "";
+"projectRoot" = "";
+"targets" = ("000000000000000000000032");
+};
+};
+"rootObject" = "000000000000000000000001";
+}
