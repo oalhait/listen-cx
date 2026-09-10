@@ -82,3 +82,26 @@ Test-first evidence: the initial 11-test core suite ran against a throwing stub 
 10. Repeat once with the publisher foregrounded, then background or lock it during a pending operation. Record lifecycle timestamps and when progress resumes. Fetching a new server revision while the app is suspended does not schedule any work in this harness. A scheduled/background publisher is a later operational decision, not a result of this experiment.
 
 No second-account observation, stable shared URL, duplicate/empty provider semantics, background latency, or native mutation result is claimed yet. The smallest next user action is connecting an authorized publisher device and configuring this target's MusicKit-enabled signing identity; the sharing conclusion additionally requires the second account.
+
+## Prepared local device session
+
+A follow-up preparation verified four distinct US catalog songs with playback parameters (HTTP 200, 4/4), using the existing Doppler developer credentials. Real IDs, titles, and verification timestamp live only in the ignored `spikes/apple-publisher/.local/live-experiment/` directory. This is US catalog availability, not the connected publisher's storefront or native library proof. No key or token is stored in these fixtures.
+
+- `catalog-verification.json`: A/B/C/D mapping, names, catalog IDs, storefront, and check timestamp.
+- `revision-1.json`: `[A,B,C]` at revision 1.
+- `revision-2.json`: `[C,A,D]` at revision 2, with the same disposable opaque key.
+- `desired.json`: the current served revision, initially revision 1.
+
+```sh
+node spikes/apple-publisher/server.mjs spikes/apple-publisher/.local/live-experiment/desired.json
+```
+
+After revision 1 is verified on the real publisher and saved by the second account, advance the handoff file with:
+
+```sh
+cp spikes/apple-publisher/.local/live-experiment/revision-2.json spikes/apple-publisher/.local/live-experiment/desired.json
+```
+
+Copying the file changes the read-only handoff response; only an explicit native Publish action writes the provider playlist. Confirm the publisher storefront before using these prepared IDs. Keep the saved app container and signing identity intact across both revisions.
+
+The target's effective settings are automatic signing, `Apple Development`, and bundle ID `cx.listen.ApplePublisherSpike`, with no configured `DEVELOPMENT_TEAM` or provisioning-profile selection. The default bundle ID's registration/MusicKit App Service status has not been inspected in the developer portal. Existing Doppler API credentials do not establish that registration. Coordinate team/App ID selection before any portal changes.
