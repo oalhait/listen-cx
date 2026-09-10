@@ -1,0 +1,177 @@
+import { customAlphabet, nanoid } from "nanoid";
+import type { Resolved } from "./resolve.js";
+import type { ParsedTrack, Provider } from "./urls.js";
+import { isManagementAuthorization, type ManagementAuthorization } from "./thread-security.js";
+import {
+  THREAD_ACTIVE_LIMIT, THREAD_TOTAL_LIMIT, THREAD_MUTATION_LIMIT, THREAD_CREATION_LIMIT,
+  ThreadError, desiredState, isThreadCapability, mutationFingerprint, normalizeRequestKey,
+  normalizeThreadTitle, sha256, validateRevision,
+  type ManagementIntent, type MutationIntent, type MutationReceipt, type MutationRequest,
+  type PublicationStatus, type ThreadContribution, type ThreadView,
+} from "./thread.js";
+
+const linkSlug = customAlphabet("23456789abcdefghjkmnpqrstuvwxyz", 7);
+
+interface SnapshotRow {
+  public_capability: string;
+  title: string;
+  revision: number;
+  closed_at: string | null;
+  songs: string;
+  publications: string;
+}
+
+export class D1ThreadStore {
+  constructor(private readonly db: D1Database) {}
+
+  async create(rawTitle: string, creationKey: string): Promise<ThreadView> {
+    const title = normalizeThreadTitle(rawTitle);
+    if (!isThreadCapability(creationKey)) throw new ThreadError(400, "invalid_key", "Send a valid creation key.");
+    const digest = await sha256(creationKey);
+    let capability = nanoid(22);
+    while (capability === creationKey) capability = nanoid(22);
+    const db = this.db.withSession("first-primary");
+    await db.batch([
+      db.prepare(`INSERT INTO threads(public_capability, management_digest, title)
+        SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM thread_creations WHERE request_digest = ?)
+        AND (SELECT COUNT(*) FROM threads) < ?`).bind(capability, digest, title, digest, THREAD_CREATION_LIMIT),
+      db.prepare(`INSERT INTO thread_creations(request_digest, thread_id)
+        SELECT ?, id FROM threads WHERE public_capability = ?`).bind(digest, capability),
+    ]);
+    const created = await db.prepare(`SELECT t.public_capability, t.title FROM threads t
+      JOIN thread_creations c ON c.thread_id = t.id WHERE c.request_digest = ?`)
+      .bind(digest).first<{ public_capability: string; title: string }>();
+    if (!created) throw new ThreadError(503, "creation_limit", "Thread creation is unavailable. Try again later.");
+    if (created.title !== title) throw new ThreadError(409, "request_conflict", "This creation key was already used for a different title.");
+    return (await this.get(created.public_capability))!;
+  }
+
+  async getManagementDigest(capability: string): Promise<string | null> {
+    return this.db.withSession("first-primary").prepare("SELECT management_digest FROM threads WHERE public_capability = ?")
+      .bind(capability).first<string>("management_digest");
+  }
+
+  async get(capability: string): Promise<ThreadView | null> {
+    if (!isThreadCapability(capability)) return null;
+    const row = await this.db.withSession("first-primary").prepare(`SELECT
+      t.public_capability, t.title, t.revision, t.closed_at,
+      (SELECT json_group_array(json_object('id', s.id, 'title', s.title, 'artist', s.artist,
+        'artworkUrl', s.artwork_url, 'linkSlug', s.link_slug,
+        'source', json_object('provider', s.source_provider, 'id', s.source_catalog_id,
+        'storefront', s.source_storefront, 'verified', json(CASE s.source_verified WHEN 1 THEN 'true' ELSE 'false' END))))
+       FROM (SELECT c.*, l.title, l.artist, l.artwork_url FROM thread_contributions c
+         JOIN links l ON l.slug = c.link_slug WHERE c.thread_id = t.id AND c.removed_at IS NULL
+         ORDER BY c.sort_order, c.position, c.id) s) AS songs,
+      (SELECT json_group_array(json_object('provider', p.provider, 'requestedRevision', p.requested_revision,
+        'appliedRevision', p.applied_revision, 'status', p.status, 'blockedReason', p.blocked_reason,
+        'failureCode', p.failure_code, 'verifiedPlaylistId', p.verified_playlist_id))
+       FROM thread_publications p WHERE p.thread_id = t.id) AS publications
+      FROM threads t WHERE t.public_capability = ?`).bind(capability).first<SnapshotRow>();
+    if (!row) return null;
+    const contributions: ThreadContribution[] = JSON.parse(row.songs);
+    const publications: PublicationStatus[] = JSON.parse(row.publications);
+    return { publicCapability: row.public_capability, title: row.title, revision: row.revision, closedAt: row.closed_at, contributions, publications };
+  }
+
+  async getDesiredState(capability: string, provider: Provider) {
+    const view = await this.get(capability);
+    return view ? desiredState(view, provider) : null;
+  }
+
+  async preflight(capability: string, rawKey: string, fingerprint: string, expectedRevision: number): Promise<MutationReceipt | null> {
+    const key = normalizeRequestKey(rawKey);
+    validateRevision(expectedRevision);
+    const row = await this.db.withSession("first-primary").prepare(`SELECT t.revision, t.closed_at,
+      m.fingerprint, m.revision AS receipt_revision FROM threads t
+      LEFT JOIN thread_mutations m ON m.thread_id = t.id AND m.request_key = ?
+      WHERE t.public_capability = ?`).bind(key, capability)
+      .first<{ revision: number; closed_at: string | null; fingerprint: string | null; receipt_revision: number | null }>();
+    if (!row) throw new ThreadError(404, "not_found", "Thread not found.");
+    if (row.receipt_revision !== null) {
+      if (row.fingerprint !== fingerprint) throw new ThreadError(409, "request_conflict", "This request key was already used for a different change.");
+      return { revision: row.receipt_revision, replayed: true };
+    }
+    if (row.closed_at !== null) throw new ThreadError(410, "closed", "This Thread is closed.");
+    if (row.revision !== expectedRevision) throw new ThreadError(409, "stale_revision", "The Thread changed. Refresh and try again.");
+    if (row.revision >= THREAD_MUTATION_LIMIT) throw new ThreadError(409, "mutation_limit", "This Thread has reached its edit limit.");
+    return null;
+  }
+
+  async add(capability: string, request: MutationRequest & { source: ParsedTrack; track: Resolved }): Promise<MutationReceipt> {
+    const { source, track } = request;
+    return this.mutate(capability, request, { kind: "add", source }, (db, token, fingerprint) => {
+      const slug = linkSlug();
+      return [
+        db.prepare(`INSERT INTO links(slug, title, artist, artwork_url, spotify_url, apple_url, complete)
+          SELECT ?, ?, ?, ?, ?, ?, 0 FROM threads WHERE public_capability = ? AND mutation_token = ?`)
+          .bind(slug, track.title, track.artist, track.artworkUrl, source.provider === "spotify" ? track.spotifyUrl : null,
+            source.provider === "apple" ? track.appleUrl : null, capability, token),
+        db.prepare(`INSERT INTO thread_contributions(thread_id, link_slug, request_key, input_fingerprint,
+          source_provider, source_catalog_id, source_storefront, position, sort_order, source_verified)
+          SELECT t.id, ?, ?, ?, ?, ?, ?,
+            COALESCE((SELECT MAX(position) FROM thread_contributions WHERE thread_id = t.id), 0) + 1,
+            COALESCE((SELECT MAX(sort_order) FROM thread_contributions WHERE thread_id = t.id AND removed_at IS NULL), 0) + 1, 1
+          FROM threads t WHERE t.public_capability = ? AND t.mutation_token = ?`)
+          .bind(slug, normalizeRequestKey(request.requestKey), fingerprint, source.provider, source.id, source.storefront, capability, token),
+      ];
+    });
+  }
+
+  async manage(authorization: ManagementAuthorization, request: MutationRequest & ManagementIntent): Promise<MutationReceipt> {
+    if (!isManagementAuthorization(authorization)) throw new ThreadError(403, "forbidden", "Management access required.");
+    const capability = authorization.publicCapability;
+    return this.mutate(capability, request, request, (db, token) => {
+      if (request.kind === "close") return [db.prepare("UPDATE threads SET closed_at = datetime('now') WHERE public_capability = ? AND mutation_token = ?").bind(capability, token)];
+      if (request.kind === "remove") return [db.prepare(`UPDATE thread_contributions SET removed_at = datetime('now')
+        WHERE id = ? AND thread_id = (SELECT id FROM threads WHERE public_capability = ? AND mutation_token = ?)`)
+        .bind(request.id, capability, token)];
+      return [db.prepare(`UPDATE thread_contributions SET sort_order =
+        (SELECT CAST(key AS INTEGER) + 1 FROM json_each(?) WHERE value = thread_contributions.id)
+        WHERE removed_at IS NULL AND thread_id = (SELECT id FROM threads WHERE public_capability = ? AND mutation_token = ?)`)
+        .bind(JSON.stringify(request.ids), capability, token)];
+    });
+  }
+
+  private async mutate(
+    capability: string,
+    request: MutationRequest,
+    intent: MutationIntent,
+    statements: (db: D1DatabaseSession, token: string, fingerprint: string) => D1PreparedStatement[],
+  ): Promise<MutationReceipt> {
+    const key = normalizeRequestKey(request.requestKey);
+    const fingerprint = await mutationFingerprint(intent);
+    const replay = await this.preflight(capability, key, fingerprint, request.expectedRevision);
+    if (replay) return replay;
+    const view = (await this.get(capability))!;
+    if (view.revision !== request.expectedRevision) throw new ThreadError(409, "stale_revision", "The Thread changed. Refresh and try again.");
+    if (intent.kind === "reorder") {
+      const activeIds = new Set(view.contributions.map(song => song.id));
+      if (intent.ids.length !== activeIds.size || new Set(intent.ids).size !== activeIds.size || intent.ids.some(id => !activeIds.has(id))) {
+        throw new ThreadError(400, "invalid_order", "Include every current song exactly once.");
+      }
+    }
+    if (intent.kind === "remove" && !view.contributions.some(song => song.id === intent.id)) {
+      throw new ThreadError(404, "contribution_not_found", "This song is not in the Thread.");
+    }
+    if (intent.kind === "add" && view.contributions.length >= THREAD_ACTIVE_LIMIT) {
+      throw new ThreadError(409, "full", `A Thread can contain up to ${THREAD_ACTIVE_LIMIT} songs.`);
+    }
+    const db = this.db.withSession("first-primary");
+    const token = nanoid(22);
+    const addCondition = intent.kind === "add" ? `AND (SELECT COUNT(*) FROM thread_contributions WHERE thread_id = threads.id) < ${THREAD_TOTAL_LIMIT}` : "";
+    const results = await db.batch([
+      db.prepare(`UPDATE threads SET revision = revision + 1, mutation_token = ?
+        WHERE public_capability = ? AND revision = ? AND closed_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM thread_mutations WHERE thread_id = threads.id AND request_key = ?)
+        ${addCondition} RETURNING revision`).bind(token, capability, request.expectedRevision, key),
+      ...statements(db, token, fingerprint),
+      db.prepare(`INSERT INTO thread_mutations(thread_id, request_key, fingerprint, revision)
+        SELECT id, ?, ?, revision FROM threads WHERE public_capability = ? AND mutation_token = ?`)
+        .bind(key, fingerprint, capability, token),
+    ]);
+    if (results[0]?.results.length === 1) return { revision: request.expectedRevision + 1, replayed: false };
+    const raced = await this.preflight(capability, key, fingerprint, request.expectedRevision);
+    if (raced) return raced;
+    throw new ThreadError(409, "contribution_limit", "This Thread has reached its contribution limit.");
+  }
+}
