@@ -1,10 +1,99 @@
-# Apple shared publisher spike
+# Apple Music web playlist sync research
+
+Research checked September 10, 2026 (UTC). Branch: `omar/apple-publishing-spike`. This decision supersedes the native publisher investigation below. **The product is web-only:** people collaborate on an ordered Thread on our website, then listen in their existing Spotify or Apple Music app. No companion app, device provisioning, or native publisher runtime is part of the proposed product.
+
+## Recommendation
+
+**Do not promise full Apple Music sync yet.** The public Apple web/server surface supports creating library playlists and appending tracks, but the current documentation exposes no operation that removes tracks or replaces their order on an existing playlist. A stable provider ID and public link across `[A,B,C]` → `[C,A,D]` therefore have no established web implementation. This is a conclusion about the reviewed supported surfaces, not proof that no private commercial agreement could provide one. [Apple playlist API](https://developer.apple.com/documentation/applemusicapi/playlists-api)
+
+Keep the website's ordered revision authoritative and continue the separate Spotify route. For Apple, pursue one bounded partner inquiry with TuneMyMusic before investing in an integration: its own Apple-specific guide claims destination removals, but neither an embeddable API nor stable-ID, ordering, and saved-follower guarantees were established. If that route cannot meet the contract, choose explicitly between delaying Apple full sync and offering **“Export a copy to Apple Music.”** A copy can represent one revision; it cannot carry a promise that previously saved playlists will update.
+
+The native spike is stopped regardless of whether its Mac crash could be fixed. Its runtime dependency already violates the web-only requirement. This research made no new provider writes, authorization attempts, or device changes.
+
+## What the supported Apple surfaces provide
+
+| Surface | Documented behavior | Consequence for this product |
+| --- | --- | --- |
+| Library playlist creation | Create a new playlist with initial track relationships | Suitable starting point for a revision export; it creates a new identity |
+| Add tracks | Append to the end of an existing library playlist | Cannot remove B or move C before A in the example |
+| Add a resource to a library | Add catalog resources to the subscriber's library | Does not replace an owned playlist's track list |
+| MusicKit JS v3 | Authorized access to Apple Music API and web playback | No additional documented full-playlist edit surface; playback queue edits are not saved playlist edits |
+| Catalog/shared playlists | Read playlist resources and expose provider sharing semantics | A readable catalog ID or public URL does not confer edit permission |
+| Apple-native collaboration | Participants edit through Apple's product | Does not expose the required website writer; also changes where collaboration happens |
+
+The fresh [playlist topic index](https://developer.apple.com/documentation/applemusicapi/playlists-api) still lists creation, track addition, and adding resources under its create/modify group. The [create endpoint](https://developer.apple.com/documentation/applemusicapi/create-a-new-library-playlist) accepts initial tracks; the [track endpoint](https://developer.apple.com/documentation/applemusicapi/add-tracks-to-a-library-playlist) specifically appends them. Both require subscriber authorization. Creation and additions need subsequent readback before we can claim a revision is present. The [library resource-add endpoint](https://developer.apple.com/documentation/applemusicapi/add-a-resource-to-a-library) is not a playlist replacement operation.
+
+This check builds on the [existing endpoint inventory](apple-music-endpoint-inventory.md), rather than inferring capability from generic HTTP methods. The current [MusicKit JS v3 reference](https://js-cdn.music.apple.com/musickit/v3/docs/index.html?path=/story/reference-javascript-api--page) and its public documentation bundle demonstrate `music.api.music(...)` calls into Apple Music API and authorize access to Cloud Library. Supplying a different fetch method does not establish a supported endpoint. The reviewed [WWDC26 MusicKit session](https://developer.apple.com/videos/play/wwdc2026/254/) covers native integration, authorization, music selection, catalog requests, playback, and sharing; it supplies no web/server replacement or removal operation.
+
+For an approved export implementation, a server would sign developer tokens and keep the private key server-side. MusicKit JS handles subscriber authorization and decorates personalized requests with the Music User Token. Neither our site's login nor possession of a developer JWT grants library access. Any later server-side subscriber operation would need its own token handling and reauthorization behavior; this research establishes no permanent background authorization guarantee. [Developer tokens](https://developer.apple.com/documentation/applemusicapi/generating-developer-tokens), [subscriber authentication](https://developer.apple.com/documentation/applemusicapi/user-authentication-for-musickit)
+
+### Sharing and collaboration do not supply a writer
+
+Apple documents participants adding, removing, and reordering songs in [collaborative playlists](https://support.apple.com/en-us/118494). However, an Apple DTS engineer's October 2025 [API clarification](https://developer.apple.com/forums/thread/798693) says collaborative playlists have `canEdit=false` in those APIs and requests an enhancement for editing support. No newer public operation resolving that restriction was found in this review. A normal playlist's `canEdit=true` should likewise not be interpreted as permission to call undocumented removal or reorder routes.
+
+Apple's [sharing guide](https://support.apple.com/en-gb/guide/iphone/iphe5a418a82/ios) describes shared-playlist updates reaching followers. Our earlier Mac UI experiment observed one added song at the same public URL. Neither fact provides a web writer, and our experiment did not check a second subscriber's previously saved entry. A saved shared reference, a newly copied personal playlist, and an Apple collaborative playlist must remain distinct in the design.
+
+Editorial, external, and user-shared catalog [playlist types](https://developer.apple.com/documentation/applemusicapi/playlists/attributes-data.dictionary) are resource classifications, not a documented self-service publishing permission. No catalog/curator API granting arbitrary websites full edits was found. Changing the redirect behind a stable `listen.cx` URL also cannot move an Apple subscriber's existing saved reference to a different provider playlist.
+
+## Existing services and integration availability
+
+| Service | Actual integration surface found | Apple removal / order / identity / followers | Decision |
+| --- | --- | --- | --- |
+| Soundiiz | Public import links, beta User API, business partner program | Explicitly disallows Apple track removal and sorting; no full-mirror path established | Possible export handoff, not full sync |
+| TuneMyMusic | Consumer web transfer and scheduled sync; business inquiry channel | Apple-specific removal claim; order, same ID/public link, previously saved followers, and embeddable API unverified | Best bounded commercial lead, not an implementation decision |
+| SongShift / Apple's built-in transfer | SongShift's consumer iPhone/iPad app; Apple now also offers transfer in its existing apps and on the web | Import workflow documented; no continuous same-ID publishing or public integration contract established | Useful migration option, not website-driven mirroring |
+
+**Soundiiz:** its support article updated September 4, 2026 explicitly says Apple playlists cannot have tracks removed or be sorted through Soundiiz. Its generic Replace sync needs removal permission; Add mode retains existing tracks. Thus its general platform read/write labels and sync marketing do not satisfy our edit contract. [Current restrictions](https://support.soundiiz.com/hc/en-us/articles/8493033465746-Soundiiz-Error-104-Can-t-Delete-Rename-or-Remove-Duplicates-on-Some-Platforms), [sync semantics](https://support.soundiiz.com/hc/en-us/articles/360010006193-How-Soundiiz-Playlist-Sync-Works-Direction-Add-vs-Replace-and-Frequency)
+
+Soundiiz does have real developer surfaces. Its [User API](https://soundiiz.com/api/doc) uses a Creator account's personal API key; the inspected playlist CRUD operates on **Soundiiz playlists**, not direct Apple playlists. Sync endpoints list, retrieve, delete, and trigger existing eligible syncs; no sync-creation operation was present in the inspected specification. Its [public import API](https://soundiiz.com/api/doc/public_import) accepts a tracklist and returns a temporary import URL, suitable for a user-completed export flow. Its [partner program](https://soundiiz.com/partners) is a real contact route, but does not document an exemption from the Apple restrictions. Personal API access should not be assumed to license a multi-user embedded product.
+
+**TuneMyMusic:** the current [sync page](https://www.tunemymusic.com/features/sync) advertises daily monitoring and Mirror/Add-only modes. More specifically, its [Spotify-to-Apple guide](https://blog.tunemymusic.com/how-to-transfer-spotify-playlist-to-apple-music/), last updated October 24, 2024, says Mirror removes songs from the Apple destination when removed from Spotify. That is a vendor claim, not a test result. The article also contains an outdated statement that streaming services lack built-in transfer, which Apple's newer transfer feature disproves. Do not dismiss the removal claim, but do not infer current API availability or a stable destination ID from it. No public developer integration specification was found in the reviewed site, help, and targeted API searches. The [business inquiry form](https://www.tunemymusic.com/contact-us) is the next contact surface; no inquiry has been sent.
+
+A possible partner topology is `website Thread → our Spotify playlist → TuneMyMusic → Apple playlist`. It would preserve website authority only if our revision is first verified on Spotify and the partner can reproduce that revision on Apple. It adds a second replication step, provider matching, and the advertised daily delay. The same-ID/removal/order/follower proof is still required; using Spotify as an intermediate source does not resolve it by itself. A licensed partner API accepting explicit Apple IDs and desired revisions would be preferable if available.
+
+**SongShift and built-in transfer:** SongShift's [FAQ](https://www.songshift.com/faq) describes its iPhone/iPad application and points to Apple's transfer feature. Apple's [March 31, 2026 guide](https://support.apple.com/en-us/118249) supports transfers through existing Apple Music apps and `music.apple.com`, with user selection and review of alternate matches. Only user-created playlists transfer. This avoids installing our app for a migration, but the guide supplies neither a continuous sync contract nor an API for our arbitrary Thread revisions. An established Apple integration does not imply that SongShift exposes equivalent rights to another website.
+
+## Explicit compromises
+
+These are alternatives for Omar to choose, not accepted replacements for full sync.
+
+| Option | What the user gets | What changes from the requested contract |
+| --- | --- | --- |
+| Export the current revision as a new Apple playlist | A copy playable in the existing Apple Music app | Subsequent website edits do not update it; exporting again creates a different playlist |
+| Append-only destination | One stable playlist accumulating new songs | Removals, reorder, and insertion before existing tracks diverge from the Thread |
+| Create a new published playlist per revision | A newly verified snapshot behind the website's current link | Old public IDs and subscribers' saved references remain on old revisions |
+| Collaborate directly in Apple Music | Apple's own playlist editing experience | Website no longer owns those edits; does not unify the Spotify audience |
+| Play the Thread through MusicKit JS | Website can present its current playback order | Listening happens in the website rather than the requested existing provider app |
+| Open individual Apple song links | Existing-app access to selected songs | No synchronized playlist |
+
+If a compromise is acceptable, **snapshot export is the smallest honest first feature**: authorize on the website, resolve and confirm Apple catalog entries, create a playlist for one explicit revision, then verify the ordered returned contents before showing success. Expose unmatched/unavailable songs instead of silently substituting recordings. Existing cross-provider catalog candidates remain candidates until verified. This is a proposed implementation, not a completed live export test; exact order, duplicates, empty lists, storefront behavior, and app-opening behavior still need focused validation.
+
+## Resolve the partner question before integration work
+
+The next useful action is a scoped commercial inquiry, followed by a disposable acceptance test only if the vendor confirms support. Draft inquiry, not sent:
+
+> We run a web-only collaborative playlist product. Can your supported commercial integration synchronize an ordered list into one Apple Music playlist, including removals and reorder, while preserving its provider ID and public URL? Users must not install our software or keep a native publisher/browser running. Please provide the embeddable API and licensing path, Apple authorization model, supported source formats or services, update latency, and whether people who saved that same shared playlist receive the edits. Can you demonstrate `[A,B,C]` becoming `[C,A,D]` on the same Apple playlist ID, with a second subscriber having saved it before the change?
+
+Require a written answer distinguishing current Apple support from generic sync features. Establish whether the integration accepts exact catalog IDs or rematches tracks, whether a Spotify source is required, whether we can trigger and observe jobs, and how revocation, retries, rate limits, stale jobs, and ambiguous creation are reported. The mechanism must be a supported commercial API; private endpoint replay, copied first-party sessions, user credentials, or UI automation are outside this design.
+
+Acceptance must independently establish:
+
+1. A web-authorized initial `[A,B,C]` destination with recorded provider ID, public URL, full ordered readback, and a saved reference on a second independent Apple subscriber account.
+2. Browser closure and no custom native runtime; the next website revision `[C,A,D]` reaches **that same** destination. Verify B absent, D present, and C before A both through publisher readback and the second account's previously saved entry.
+3. Actual propagation delay and required refresh behavior. A new playlist with the same name, updated website redirect, logged-out page alone, or publisher-only success does not pass.
+4. Repeated revisions, duplicates, empty lists, missing tracks/storefront mismatches, authorization revocation, and interrupted operations. Failure must remain visible and must not silently create replacement destinations or claim a partial revision is synchronized.
+
+Without that evidence, keep Apple full-sync capability unavailable and present any chosen export behavior by its actual contract. This document changes research guidance only; it does not alter the Worker, storage, UI, provider clients, or existing playlists.
+
+## Historical native publisher investigation — stopped
+
+Everything below records the earlier developer experiment. Its device instructions are archived reproduction notes, **not current next steps**. Do not resume native setup, run the publisher, reset its ambiguous creation journal, or perform playlist writes under this web-only research task.
 
 September 9, 2026. Branch: `omar/apple-publishing-spike`. Experimental developer harness; no deployment. The spike attempted one native playlist creation on iOS-on-Mac and crashed inside Apple’s framework; no successful native creation or readback was established. A separate Mac Music UI experiment created and added songs to one disposable playlist, as recorded below.
 
 Mac Music testing proves playlist creation, public sharing, and an added song appearing at the same logged-out public URL. The native publisher also builds, passes its local reconciliation tests, and receives changed desired revisions in the iOS simulator. Whether our publisher-side companion can serve listeners who never install it remains **unproven**: native creation fails on the tested Mac route, while physical-iOS app ownership and second-account saved-playlist propagation have not been demonstrated.
 
-## Evidence and remaining gates
+### Evidence and remaining gates
 
 | Layer | Actual result |
 | --- | --- |
@@ -23,7 +112,7 @@ Mac Music testing proves playlist creation, public sharing, and an added song ap
 
 `xcrun devicectl list devices` still returns “No devices found,” but the Mac destination works through Xcode. Omar registered the Mac, and an iOS development profile was created and installed for the existing MusicKit-enabled `listen-cx` App ID and valid Apple Development identity. The Doppler Apple private key is a separate developer-token credential, not application signing or Music User Token authorization.
 
-## Mac Music UI experiment
+### Mac Music UI experiment
 
 This completed behavior test used Apple Music on the Mac and required no iPhone/iPad. It did not execute the spike’s native MusicKit adapter or create a playlist owned by our app.
 
@@ -39,7 +128,7 @@ Explicit **Remove from Playlist** attempts did not change the visible rows, so r
 
 The observed final playlist therefore contains the four songs above. There was no successful removal/reorder result, second-account save, follower propagation observation, our-app ownership proof, or native MusicKit publisher execution. A logged-out visitor seeing updated public rows is a narrower result than a subscriber’s previously saved playlist updating. The Mac result also does not prove that our native app can edit this Apple Music-created playlist.
 
-## Current Apple constraints
+### Current Apple constraints
 
 Apple documents native playlist rebuilding through [`MusicLibrary.edit(..., items:)`](https://developer.apple.com/documentation/musickit/musiclibrary/edit(_:name:description:authordisplayname:items:)) and restricts edits to playlists the app created. The installed iPhoneOS 26.2 SDK explicitly marks the creation and edit methods unavailable on macOS and Mac Catalyst. The spike targets iOS APIs and has no macOS or Mac Catalyst port. Running that iOS binary through “Designed for iPad/iPhone” is a separate candidate, investigated below.
 
@@ -51,7 +140,7 @@ Apple describes sharing playlists and updates appearing for followers in its [iP
 
 [Background notification delivery is not guaranteed](https://developer.apple.com/documentation/usernotifications/pushing-background-updates-to-your-app). This console fetches/publishes only on button presses. It has no background modes, periodic job, push registration, or latency promise. Scene transitions print timestamps for a future device experiment; successful publisher readback reports elapsed time.
 
-## No-cable native execution investigation
+### No-cable native execution investigation
 
 The existing iOS app now builds, installs, and launches on this Mac without a cable. MusicKit authorization and read-only preflight succeed with an explicit developer-token override, but the first native playlist creation aborts in an unavailable Apple framework class. Setup created a development provisioning profile after Omar registered this Mac; no library mutations occurred during setup.
 
@@ -64,7 +153,7 @@ The existing iOS app now builds, installs, and launches on this Mac without a ca
 
 Apple documents [running an unmodified iOS app natively on Apple silicon](https://developer.apple.com/documentation/apple-silicon/running-your-ios-apps-in-macos). It is not Simulator and does not require recompiling the app as Mac Catalyst. Apple also warns that feature availability must be tested on the actual platform. The shared underlying framework infrastructure, or the presence of the iOS method at compile time, does not establish that playlist rebuilding works in this execution environment. The first native creation attempt now establishes an API-specific runtime failure on the tested macOS 26.5.2 / iOS SDK 26.2 combination; it does not prove that every OS release behaves the same way.
 
-### Signing and installation completed
+#### Signing and installation completed
 
 The valid Apple Development certificate belongs to team `ZW4CL8J474`. The initial profile failures were resolved by reusing the existing explicit `listen-cx` App ID rather than creating `cx.listen.ApplePublisherSpike`. Omar completed the annual device review and registered this Mac. The agent then created **listen-cx Apple Publisher Mac Development**, using the existing development certificate and only this Mac as the provisioned device, downloaded it, and installed it in Xcode's user provisioning-profile directory. No device was removed or reset by the agent.
 
@@ -78,13 +167,13 @@ xcodebuild -project spikes/apple-publisher/ApplePublisherSpike.xcodeproj -scheme
 
 Direct LaunchServices opening of the raw `Debug-iphoneos` app failed with `-10661` (no compatible executable). Xcode's **My Mac (Designed for iPad)** Run action successfully installed the iOS wrapper and launched the app. For this GUI run, an ignored `.local/MacRun/` project references the same source files with local signing overrides; the checked-in project remains unchanged. Before launch, no matching installed app or existing `listen-cx` container was found. The running app fetched the real revision-1 fixture and displayed MusicKit authorization `.authorized`. No authorization prompt was captured or clicked by the agent.
 
-### Automatic MusicKit token failure
+#### Automatic MusicKit token failure
 
 The new **Check MusicKit access** action runs read-only storefront, subscription, and catalog preflight without calling the publisher or writing a journal. At `2026-09-10T05:11:25Z`, `MusicDataRequest.currentCountryCode` failed with `.developerTokenRequestFailed`. Process logs showed `ICError -8200`, token-service HTTP 404, and payload `Client not found`, status `40402`, identifying `listen-cx` as the unrecognized client. No native catalog request or subscription check succeeded in this attempt; authorization alone does not prove either.
 
 Authenticated read-only portal reinspection confirmed the explicit App ID `listen-cx`, team `ZW4CL8J474`, and **MusicKit checked** in App Services. The built app's `CFBundleIdentifier` also equals `listen-cx`. No service was toggled, App ID recreated, or credential reset. Apple's [automatic-token setup guide](https://developer.apple.com/documentation/musickit/using-automatic-token-generation-for-apple-music-api) requires that matching registration. An [Apple engineer's explanation of this exact error](https://developer.apple.com/forums/thread/705056) recommends checking the bundle-ID match. Those checks pass here, so the remaining failure is unresolved; it does not establish an iOS-on-Mac create/edit limitation.
 
-### Supported token override and first native creation
+#### Supported token override and first native creation
 
 Apple exposes [`MusicDataRequest.tokenProvider`](https://developer.apple.com/documentation/musickit/musicdatarequest/tokenprovider) and [`MusicDeveloperTokenProvider`](https://developer.apple.com/documentation/musickit/musicdevelopertokenprovider). The explicit **Use local developer token** button installs a provider that inherits Apple's `MusicUserTokenProvider` for user authorization and obtains only the developer JWT from `127.0.0.1:8791`. This selection applies to the current process; automatic mode remains the default after relaunch. The SDK's shared token-provider property lacks Swift concurrency annotations, so this console imports MusicKit with `@preconcurrency`; selection happens on the main actor and the button is disabled while another console action is running.
 
@@ -109,15 +198,15 @@ The durable journal contains pending revision 1, the original key, and ordered I
 
 A subsequent read-only Music app search scoped to **Your Library** returned **No results found** for the exact unique key. That is an observed absence in the local library view, not proof that no backend side effect occurred. Creation remains unverified and fenced by the pending-without-ID journal. No automatic create retry, journal reset, revision-2 attempt, public link, app-owned readback, or second-account propagation result followed. The same journal's next identical publish would reject with `unresolvedCreation` before calling the provider, as covered by the reconciliation tests.
 
-The minimum next capability test is the same signed iOS harness on a physical iPhone/iPad with the publisher subscription, first running read-only preflight. Preserve this Mac's ambiguous journal; inspect the uniquely named playlist before any separately coordinated disposable create, and do not assume a new installation can resume this pending destination. A successful physical-iOS create must return and persist an ID, verify `[A,B,C]`, then rebuild that same ID to `[C,A,D]`. Saved-subscriber propagation remains a later independent test.
+Before the web-only decision, the proposed next capability test was the same signed iOS harness on a physical iPhone/iPad with the publisher subscription, first running read-only preflight. That proposal is now superseded and must not be resumed under this task. Preserve this Mac's ambiguous journal; inspect the uniquely named playlist before any separately coordinated disposable create, and do not assume a new installation can resume this pending destination. A successful physical-iOS create must return and persist an ID, verify `[A,B,C]`, then rebuild that same ID to `[C,A,D]`. Saved-subscriber propagation remains a later independent test.
 
-For a physical-device fallback, first try making an already paired, unlocked device available on the same network and selecting it in Xcode. If it was never paired, initial trust/pairing and Developer Mode setup may require a one-time cable connection; that is a future user action, not something performed during this investigation.
+The archived physical-device fallback was to try making an already paired, unlocked device available on the same network and selecting it in Xcode. If it was never paired, initial trust/pairing and Developer Mode setup may require a one-time cable connection; that is a future user action, not something performed during this investigation.
 
-### Useful evidence still available without iOS execution
+#### Useful evidence still available without iOS execution
 
 A second subscriber can open the earlier Music-app-created public playlist in Apple Music on their own Mac, save it there without installing this spike, and later check the saved entry after an authorized publisher edit. Record the original URL and saved entry, track order before/after, refresh behavior, and elapsed time. This can establish saved-reference propagation independently of our app’s execution. No account switching on Omar’s Mac or additional playlist edit was attempted here. Removal/reorder testing remains open; the previously blocked Mac UI automation was not repeated.
 
-## Files and experimental contract
+### Files and experimental contract
 
 All implementation is under `spikes/apple-publisher/`:
 
@@ -139,7 +228,7 @@ Repeated identical revisions reread without writing. Stale revisions and a diffe
 
 An interrupted edit can be read back on relaunch and, if still mismatched, rebuilt on the same destination. An ambiguous create with no durably recorded ID is deliberately fenced as `unresolvedCreation`: it never blindly creates a duplicate or adopts a similarly named playlist. A human must inspect the publisher library and app container before resetting a disposable experiment. There is no automatic adoption, rollback, deletion, or recovery of a lost app container. One app installation is the only writer; multi-device coordination and provider requests completing late after an interruption are not solved by this spike.
 
-## Reproduce local checks
+### Reproduce local checks
 
 Run from the repository root:
 
@@ -155,7 +244,7 @@ The server listens on `127.0.0.1:8790`; `GET /desired` serves the current file. 
 
 Test-first evidence: the initial 11-test core suite ran against a throwing stub and failed with 14 expectation/caught-error issues, then all 11 passed after implementation. Five adapter/persistence tests first failed compilation on the missing symbols, then the 16-test suite passed. A later encoded playlist-ID regression test failed on percent-encoded IDs, then passed after comparing decoded endpoint paths; the final suite has 17 tests. The HTTP test first failed because `server.mjs` did not exist, then passed against the actual loopback server. The token-helper tests first failed on a missing module, then passed for cryptographic signature/lifetime and real loopback origin/Host/method/expiry behavior; the combined Node suite has three passing tests. Native override and preflight code compiled in a signed Mac build, and the running preflight succeeded. These local contracts do not establish provider mutation behavior.
 
-## Unlock the physical-device experiment
+### Archived physical-device experiment procedure
 
 1. Connect an iPhone/iPad with Developer Mode enabled, unlock it, and trust this Mac. Sign in to a publisher Apple Music subscription and enable Sync Library. The Mac needs an Apple Development signing identity and provisioning profile for a MusicKit-enabled explicit App ID. The checked-in signing settings remain unchanged; local Mac signing setup is documented above.
 2. Open `spikes/apple-publisher/ApplePublisherSpike.xcodeproj` in Xcode. Select the publisher team under Signing & Capabilities and a unique registered bundle ID. Enable MusicKit under that App ID's App Services in the developer portal. Use the same team/bundle ID for subsequent revisions; do not recreate the app between revisions. Build and run on the connected device. The unsigned build above cannot be installed as a signed device app.
@@ -170,7 +259,7 @@ Test-first evidence: the initial 11-test core suite ran against a throwing stub 
 
 The Mac experiment established a stable public URL across one addition. Second-account saved-playlist propagation, removal/reorder, duplicate/empty provider semantics, background latency, and our native MusicKit mutation remain unverified. A second account can test the Mac-created shared playlist without an iPhone/iPad. Executing our publisher remains a separate gate requiring a signed, authorized destination. The no-cable iOS-on-Mac route launches and passes overridden-token preflight, but the first native creation crashes in an unavailable Apple framework class. No verified native destination exists to rebuild.
 
-## Prepared local device session
+### Prepared local device session
 
 A follow-up preparation verified four distinct US catalog songs with playback parameters (HTTP 200, 4/4), using the existing Doppler developer credentials. Real IDs, titles, and verification timestamp live only in the ignored `spikes/apple-publisher/.local/live-experiment/` directory. This is US catalog availability, not the connected publisher's storefront or native library proof. No key or token is stored in these fixtures.
 
