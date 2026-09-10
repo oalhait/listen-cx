@@ -1,6 +1,22 @@
 import Foundation
 import MusicKit
 
+final class LoopbackMusicTokenProvider: MusicUserTokenProvider, MusicDeveloperTokenProvider, @unchecked Sendable {
+    func developerToken(options: MusicTokenRequestOptions) async throws -> String {
+        let url = URL(string: "http://127.0.0.1:8791/developer-token")!
+        let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200, data.count <= 16_384 else {
+            throw MusicTokenRequestError.developerTokenRequestFailed
+        }
+        return try JSONDecoder().decode(TokenResponse.self, from: data).developerToken
+    }
+
+    private struct TokenResponse: Decodable {
+        let developerToken: String
+    }
+}
+
 @MainActor final class MusicKitProvider: PlaylistProvider {
     private var songs: [Song] = []
     private let prefix = "listen.cx Apple spike · "

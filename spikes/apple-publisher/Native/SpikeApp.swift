@@ -1,5 +1,5 @@
 import SwiftUI
-import MusicKit
+@preconcurrency import MusicKit
 import UniformTypeIdentifiers
 
 @main struct ApplePublisherSpikeApp: App {
@@ -43,6 +43,18 @@ import UniformTypeIdentifiers
                 Section("Publisher device") {
                     Button("Authorize MusicKit") {
                         perform { output = "Music authorization: \(await MusicAuthorization.request())" }
+                    }
+                    Button("Use local developer token") {
+                        MusicDataRequest.tokenProvider = LoopbackMusicTokenProvider()
+                        output = "Local developer-token helper selected for this app session; user authorization is still handled by MusicKit."
+                    }
+                    Button("Check MusicKit access") {
+                        perform {
+                            let desired = try JSONDecoder().decode(DesiredRevision.self, from: Data(desiredJSON.utf8))
+                            let storefront = try await MusicDataRequest.currentCountryCode
+                            try await provider.prepare(desired.trackIDs)
+                            output = "MusicKit storefront \(storefront), subscription and \(desired.trackIDs.count) catalog entries verified; no provider write performed."
+                        }
                     }
                     Button("Publish spike revision") {
                         perform {
