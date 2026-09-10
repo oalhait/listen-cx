@@ -1,8 +1,8 @@
 # Apple shared publisher spike
 
-September 9, 2026. Branch: `omar/apple-publishing-spike`. Experimental developer harness; no deployment or provider playlist writes performed.
+September 9, 2026. Branch: `omar/apple-publishing-spike`. Experimental developer harness; no deployment. The spike has not executed MusicKit playlist writes. A separate Mac Music UI experiment created and added songs to one disposable playlist, as recorded below.
 
-The native publisher builds, its reconciliation contract passes local tests, and its iOS simulator receives changed desired revisions from a real local HTTP server. Whether one publisher-side companion can serve listeners who never install our app remains **unproven**. The next decisive step is running this signed app on an authorized publisher iPhone/iPad, sharing its app-created playlist, and observing an independent subscriber account.
+Mac Music testing proves playlist creation, public sharing, and an added song appearing at the same logged-out public URL. The native publisher also builds, passes its local reconciliation tests, and receives changed desired revisions in the iOS simulator. Whether our publisher-side companion can serve listeners who never install it remains **unproven**: our MusicKit execution, app ownership, and second-account saved-playlist propagation have not been demonstrated.
 
 ## Evidence and remaining gates
 
@@ -13,11 +13,30 @@ The native publisher builds, its reconciliation contract passes local tests, and
 | Native build | Xcode 26.2 / Swift 6.2.3: simulator arm64 + x86_64 build and unsigned arm64 iPhoneOS build succeeded |
 | Native local handoff | iPhone 17 Pro simulator, iOS 26.2: app installed and launched; clicking Fetch displayed “Desired JSON fetched; no provider write performed.” Changing the fixture and fetching again displayed revision 2 and `[C,A,D]` |
 | Authenticated catalog | Existing Doppler `listen-cx` / `dev_personal` Apple developer credentials signed a short-lived ES256 token. Read-only US catalog request returned HTTP 200 and both configured track IDs (2/2). No secret values in this document |
-| Authenticated user-library readback / edit | **Not run**: no connected physical devices and 0 valid local code-signing identities |
-| Native ownership / public sharing / subscriber propagation | **Not run**: requires signed publisher app/device and a second Apple Music account |
+| Mac Music creation / sharing / addition | **Verified through Apple’s Mac UI and logged-out web**: one disposable playlist, same public URL before and after adding its fourth song |
+| Mac Music removal / reordering | **Not verified**: removal attempts left rows unchanged; reorder automation failed twice with `noWindowsAvailable` |
+| Spike MusicKit user-library readback / edit | **Not run**: no connected physical devices and 0 valid local code-signing identities |
+| Spike app ownership / app-created sharing | **Not run**: the Mac playlist was created by Apple’s Music app, not our publisher |
+| Second-account saved-playlist propagation | **Not run**: logged-out web visibility does not demonstrate a saved reference updating for a subscriber |
 | Foreground/background timing | HTTP handoff observed in the foreground; no provider timing measured. No background scheduling implemented or tested |
 
 `xcrun devicectl list devices` returned “No devices found.” `security find-identity -v -p codesigning` returned “0 valid identities found.” The Doppler Apple private key is for developer-token signing, not iOS application signing or Music User Token authorization.
+
+## Mac Music UI experiment
+
+This completed behavior test used Apple Music on the Mac and required no iPhone/iPad. It did not execute the spike’s native MusicKit adapter or create a playlist owned by our app.
+
+The disposable playlist is **listen.cx Mac publishing test 2026-09-09**, with this [public Apple Music URL](https://music.apple.com/us/playlist/listen-cx-mac-publishing-test-2026-09-09/pl.u-oZylKN9IRE7MA62). Its initial ordered rows were:
+
+1. Raid (feat. MED) — Madvillain
+2. Lonesome Town — Ricky Nelson
+3. Zombies — Childish Gambino
+
+The sharing URL opened while logged out. After adding **Sleepwalk (Remastered 2010) — Santo & Johnny** through Mac Music, refreshing that same URL showed all four rows in the order above, with Sleepwalk fourth. This verifies public sharing and addition propagation for this playlist without changing its public URL. No propagation latency was measured.
+
+Explicit **Remove from Playlist** attempts did not change the visible rows, so removal was not established. BackSpace produced a broader Cloud Music Library deletion warning; that operation was **cancelled**. Drag/reorder attempts were blocked twice by the UI automation server’s `noWindowsAvailable` error despite readable screenshots and accessibility state. That is an automation limitation, not evidence that Apple Music cannot reorder playlists.
+
+The observed final playlist therefore contains the four songs above. There was no successful removal/reorder result, second-account save, follower propagation observation, our-app ownership proof, or native MusicKit publisher execution. A logged-out visitor seeing updated public rows is a narrower result than a subscriber’s previously saved playlist updating. The Mac result also does not prove that our native app can edit this Apple Music-created playlist.
 
 ## Current Apple constraints
 
@@ -81,7 +100,7 @@ Test-first evidence: the initial 11-test core suite ran against a throwing stub 
 9. Interrupt a pending edit, relaunch, and submit that identical pending revision before a newer one. Inspect readback and identity. An uncertain create may fence the experiment for manual inspection; never retry under a new key just to hide it. Preserve existing playlists and user data.
 10. Repeat once with the publisher foregrounded, then background or lock it during a pending operation. Record lifecycle timestamps and when progress resumes. Fetching a new server revision while the app is suspended does not schedule any work in this harness. A scheduled/background publisher is a later operational decision, not a result of this experiment.
 
-No second-account observation, stable shared URL, duplicate/empty provider semantics, background latency, or native mutation result is claimed yet. The smallest next user action is connecting an authorized publisher device and configuring this target's MusicKit-enabled signing identity; the sharing conclusion additionally requires the second account.
+The Mac experiment established a stable public URL across one addition. Second-account saved-playlist propagation, removal/reorder, duplicate/empty provider semantics, background latency, and our native MusicKit mutation remain unverified. A second account can test the Mac-created shared playlist without an iPhone/iPad. Executing our publisher remains a separate gate requiring an authorized device and this target’s MusicKit-enabled signing identity.
 
 ## Prepared local device session
 
