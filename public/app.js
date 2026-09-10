@@ -30,6 +30,7 @@ async function showGeneratorView(showPreview, status, prepare = () => {}) {
     prepare();
     outgoing.hidden = true;
     incoming.hidden = false;
+    document.querySelector('#share').classList.toggle('has-result', showPreview);
     message.textContent = status;
     (showPreview ? document.querySelector('#reset-link') : input).focus({ preventScroll: true });
     if (shouldAnimate) {
@@ -51,6 +52,16 @@ const exampleButton = document.querySelector('#try-example');
 const copyButton = document.querySelector('#copy-link');
 const shortLink = document.querySelector('#short-link');
 let loading = false;
+let copyResetTimer;
+function setCopyState(copied) {
+  clearTimeout(copyResetTimer);
+  const label = copied ? 'Copied' : 'Copy link';
+  copyButton.setAttribute('aria-label', label);
+  copyButton.title = label;
+  copyButton.querySelector('use').setAttribute('href', copied ? '#check' : '#copy');
+  copyButton.querySelector('.button-label').textContent = label;
+  if (copied) copyResetTimer = setTimeout(() => setCopyState(false), 3000);
+}
 
 const controller = createLinkController({
   async update(state) {
@@ -71,14 +82,15 @@ const controller = createLinkController({
       const { data } = state;
       document.querySelector('#result-title').textContent = data.title;
       document.querySelector('#result-artist').textContent = data.artist;
+      shortLink.hidden = true;
       shortLink.href = data.link;
-      shortLink.textContent = data.link;
-      copyButton.textContent = 'Copy link';
+      shortLink.textContent = data.link.replace(/^https?:\/\//, '');
+      setCopyState(false);
       const artwork = document.querySelector('#result-artwork');
       artwork.hidden = !data.artworkUrl;
       if (data.artworkUrl) artwork.src = data.artworkUrl;
       else artwork.removeAttribute('src');
-      await showGeneratorView(true, 'Your link is ready to share.');
+      await showGeneratorView(true, '');
     }
   },
 });
@@ -93,9 +105,10 @@ copyButton.addEventListener('click', async () => {
   copyButton.disabled = true;
   try {
     await navigator.clipboard.writeText(shortLink.href);
-    copyButton.textContent = 'Copied!';
-    message.textContent = 'Link copied.';
+    setCopyState(true);
+    message.textContent = '';
   } catch {
+    shortLink.hidden = false;
     const range = document.createRange();
     range.selectNodeContents(shortLink);
     const selection = window.getSelection();

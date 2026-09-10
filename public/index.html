@@ -21,6 +21,7 @@
     <symbol id="link" viewBox="0 0 24 24"><path d="m10 14 4-4m-6 5-1 1a4.2 4.2 0 0 1-6-6l4-4a4.2 4.2 0 0 1 6 0m2 3 1-1a4.2 4.2 0 0 1 6 6l-4 4a4.2 4.2 0 0 1-6 0" transform="translate(1 0)" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
     <symbol id="spotify" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="currentColor"/><g fill="none" stroke="var(--spotify-lines, #fafafa)" stroke-linecap="round"><path d="M5.5 9c4.6-1.5 9-1.1 13 1" stroke-width="1.8"/><path d="M6.5 12.3c3.8-1.2 7.6-.8 10.8.9" stroke-width="1.6"/><path d="M7.4 15.5c3-.8 5.7-.5 8.2.7" stroke-width="1.5"/></g></symbol>
     <symbol id="music" viewBox="0 0 24 24"><path d="M9 5v12.2c0 1.6-1.7 2.8-3.5 2.8C4 20 3 19.2 3 18s1.4-2.4 3.1-2.4c.6 0 1.1.1 1.5.2V5L21 2v12.2c0 1.6-1.7 2.8-3.5 2.8-1.5 0-2.5-.8-2.5-2s1.4-2.4 3.1-2.4c.6 0 1.1.1 1.5.2V6.1L9 8.5Z" fill="currentColor"/></symbol>
+    <symbol id="copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M15 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
     <symbol id="check" viewBox="0 0 24 24"><path d="m6 12 4 4 8-8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   </defs></svg>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -40,8 +41,8 @@
             <div class="input-wrap"><input id="music-url" name="url" type="url" placeholder="Paste a Spotify or Apple Music track link…" autocomplete="off" spellcheck="false" aria-describedby="form-message"><button class="generate-button" type="submit"><span>Make a link</span><svg class="icon"><use href="#arrow"/></svg></button></div>
           </form>
           <div class="link-result" id="link-result" hidden>
-            <div class="result-track"><img id="result-artwork" width="52" height="52" alt="" hidden><div class="track-meta"><strong id="result-title"></strong><span id="result-artist"></span></div></div>
-            <div class="result-actions"><a id="short-link" href="/" aria-label="Open your shared track"></a><div><button id="copy-link" type="button">Copy link</button><button id="reset-link" type="button">Try another <span aria-hidden="true">↺</span></button></div></div>
+            <div class="result-track"><img id="result-artwork" width="48" height="48" alt="" hidden><div class="track-meta"><strong id="result-title"></strong><span id="result-artist"></span><a id="short-link" hidden href="/" aria-label="Open your shared track"></a></div></div>
+            <div class="result-actions"><button id="copy-link" type="button" aria-label="Copy link" title="Copy link"><svg class="icon" aria-hidden="true"><use href="#copy"/></svg><span class="button-label" aria-live="polite">Copy link</span></button><button id="reset-link" type="button" aria-label="Create another link" title="Create another link"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10a8 8 0 1 1 1 7M4 4v6h6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Try another</span></button></div>
           </div>
           <p class="form-message" id="form-message" role="status">Direct track links only. Albums and spotify.link are not supported yet.</p>
         </div>
