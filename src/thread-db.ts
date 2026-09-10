@@ -143,7 +143,11 @@ export class D1ThreadStore {
     const replay = await this.preflight(capability, key, fingerprint, request.expectedRevision);
     if (replay) return replay;
     const view = (await this.get(capability))!;
-    if (view.revision !== request.expectedRevision) throw new ThreadError(409, "stale_revision", "The Thread changed. Refresh and try again.");
+    if (view.revision !== request.expectedRevision) {
+      const raced = await this.preflight(capability, key, fingerprint, request.expectedRevision);
+      if (raced) return raced;
+      throw new ThreadError(409, "stale_revision", "The Thread changed. Refresh and try again.");
+    }
     if (intent.kind === "reorder") {
       const activeIds = new Set(view.contributions.map(song => song.id));
       if (intent.ids.length !== activeIds.size || new Set(intent.ids).size !== activeIds.size || intent.ids.some(id => !activeIds.has(id))) {

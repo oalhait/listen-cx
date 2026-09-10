@@ -14,6 +14,8 @@ is saved.
 Run `pnpm dev` and open the printed local URL. Database migrations are required
 for link and Jam creation.
 
+Threads collect ordered songs collaboratively; provider playlist sync remains unavailable.
+
 ## Run locally
 
 ```sh
@@ -123,6 +125,71 @@ account and subscription interactively.
 flow. A client ID alone does not authorize server-side Spotify writes or playback;
 the Spotify dashboard must also allow the exact callback and each listener must
 authorize their account.
+
+## Threads
+
+Open `/threads/new` to create an ordered, collaborative collection. The website
+owns the songs and their order. Anyone with the public sharing link can read and
+add tracks; a separate private management link can reorder, remove, and close.
+Closing freezes edits while leaving the songs readable. Other browsers see changes
+on refresh; stale edits return 409 instead of overwriting newer state.
+
+Run `pnpm migrate:local` after pulling this change, then `pnpm dev`. Migration
+`0004_thread_publication_state.sql` only adds state to the historical D1 schema.
+Existing rows, capability digests, removed contributions, and historical positions
+are preserved. Legacy Threads start at revision zero with unverified catalog
+identities. The old Thread Durable Object is not restored.
+
+All Thread mutations require JSON, a matching `Origin`, and
+`X-Listen-Action: thread`. Thread responses are private/no-store and use
+`Referrer-Policy: no-referrer`; the pages disallow third-party scripts and framing.
+
+| Route | Contract |
+| --- | --- |
+| `POST /api/threads` | `{title, creationKey}`; `creationKey` is a random 22-character URL-safe private capability generated before submission. Reusing it with the same title recovers the same Thread. Returns `thread`, `publicUrl`, and `managementUrl` with the secret in its fragment. |
+| `GET /api/threads/:capability` | Public snapshot: title, revision, ordered contributions, closed state, and publication statuses. No management secret or digest. |
+| `GET /t/:capability` | Thread page; management controls require its scoped HttpOnly cookie. |
+| `POST /api/threads/:capability/contributions` | `{url, requestKey, expectedRevision}`; resolves source metadata before committing. |
+| `POST /t/:capability/manage/activate` | Exchanges `{managementCapability}` for a Thread-scoped HttpOnly, SameSite=Strict cookie. HTTPS cookies are Secure. The browser removes the fragment before exchange. |
+| `POST /t/:capability/manage/mutate` | Manager only: `{kind, requestKey, expectedRevision}`, with `id` for `remove`, all active `ids` in desired order for `reorder`, or `kind: "close"`. |
+
+Mutation replies distinguish the committed receipt's revision from the current
+Thread snapshot. Replaying the same request key and intent returns its receipt
+without another mutation, even after removal or closure. Reusing a key for another
+intent returns 409. The client retains an interrupted request in per-tab session
+storage for retry and clears it on success. Save the private management link when
+creating a Thread; sharing it also shares management access.
+
+Each accepted mutation atomically updates songs, a monotonically increasing
+revision, its replay receipt, and both requested publication revisions. The D1
+batch claims a revision with `UPDATE … RETURNING`; D1 `meta.changes` also counts
+trigger writes and is not a reliable one-row claim check. Reorders change the new
+sort order while preserving historical contribution positions. Limits are 50
+active songs, 500 lifetime contributions, and 2,000 mutations per Thread; creation
+is capped at 10,000 Threads. These limits do not replace deployment abuse controls.
+
+### Downstream publication boundary
+
+`D1ThreadStore.getDesiredState(capability, provider)` returns one consistent
+snapshot: website revision/order, every contribution, provider-specific identity
+resolution, and publication status. An identity is verified only for a newly
+resolved source track's own service. Opposite-provider and legacy identities stay
+explicitly unresolved in their original positions. `identitiesComplete` describes
+identity coverage, not permission or readiness to publish.
+
+Publication status contains `requestedRevision`, `appliedRevision`,
+`pending | blocked | failed | synced`, `blockedReason`, `failureCode`, and
+`verifiedPlaylistId`. Both providers currently start and remain blocked; applied
+revision and verified playlist ID are null. No publisher is invoked, no provider
+edits are imported into the website, and no public route accepts playlist targets,
+operator credentials, or publication reports. A future trusted publisher must
+bind its service-owned playlist and verify full provider readback before recording
+an applied revision or marking sync complete.
+
+Spotify still needs a verified authorized server publisher. Full Apple sync needs
+a web-compatible create/remove/reorder route; native companion apps are outside
+this product. REST creation or appending alone does not establish full sync. The
+existing publishing spikes remain research and are not connected to Threads.
 
 ## Retained code
 

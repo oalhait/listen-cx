@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { nanoid } from "nanoid";
 import { D1ThreadStore } from "./thread-db.js";
 import { authorizeManagementCapability } from "./thread-security.js";
@@ -80,6 +80,21 @@ describe("durable Thread mutations", () => {
     expect(current.contributions).toHaveLength(2);
   });
 
+  it("replays a request that finishes between preflight and the snapshot read", async () => {
+    const { view } = await setup();
+    const originalGet = store.get.bind(store);
+    const spy = vi.spyOn(store, "get").mockImplementationOnce(async capability => {
+      await add(capability, 0, "between-reads");
+      return originalGet(capability);
+    });
+    try {
+      expect(await add(view.publicCapability, 0, "between-reads")).toMatchObject({ revision: 1, replayed: true });
+      expect((await originalGet(view.publicCapability))!.contributions).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("returns one receipt and one song for concurrent identical retries", async () => {
     const { view } = await setup();
     const results = await Promise.all([add(view.publicCapability, 0, "same"), add(view.publicCapability, 0, "same")]);
@@ -109,6 +124,15 @@ describe("durable Thread mutations", () => {
       await env.DB.exec("DROP TRIGGER test_reject_contribution");
     }
     expect(await add(view.publicCapability, 0, "retryable")).toMatchObject({ revision: 1, replayed: false });
+  });
+
+  it("cannot mark a publication synced without an applied revision and verified playlist ID", async () => {
+    const { view } = await setup();
+    await expect(env.DB.prepare(`UPDATE thread_publications SET status = 'synced'
+      WHERE thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
+      .bind(view.publicCapability).run()).rejects.toThrow();
+    const state = (await store.getDesiredState(view.publicCapability, "spotify"))!;
+    expect(state.publication).toMatchObject({ requestedRevision: 0, appliedRevision: null, status: "blocked", verifiedPlaylistId: null });
   });
 
   it("preserves legacy rows while keeping their catalog verification unresolved", async () => {

@@ -1,15 +1,20 @@
 # AGENTS.md
 
-This repository is restarting from provider primitives and a JSON short-link API.
-The prior UI and Thread product decisions are historical, not requirements for
-new work. Do not rebuild them unless Omar requests it.
+This repository contains source-provider track resolution, short links, and a
+web-only Threads product. Threads own ordered collaborative songs; Apple Music
+and Spotify are downstream consumers, never authorities for website order.
 
 ## Scope
 
-Keep URL parsing, Spotify/Apple metadata clients, bounded retries, source metadata
-resolution, D1 short-link storage, and the Hono Worker API. No frontend, cookies,
-redirect handoff, threads, notifications, Raycast, or playlist OAuth flows remain.
-Cross-provider catalog candidates must not be represented as verified matches.
+Keep source metadata, bounded provider retries, D1 storage, the Hono Worker API,
+and the current frontend. Public Thread capabilities can read/contribute; separate
+management capabilities remove/reorder/close. Preserve durable revisions and replay
+receipts. Keep unresolved cross-provider identities explicit, never guessed matches.
+
+Provider publishing remains blocked until a trusted adapter is authorized and
+verified by actual provider readback. No native companion requirement, notifications,
+old Thread Durable Object, playlist export, or public operator controls are restored.
+Publishing spikes remain isolated research.
 
 ## Commands
 

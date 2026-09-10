@@ -31,7 +31,7 @@ function cookieName(capability: string): string {
 }
 
 export function managementCookie(context: Context, capability: string): string | undefined {
-  return getCookie(context, cookieName(capability));
+  return isThreadCapability(capability) ? getCookie(context, cookieName(capability)) : undefined;
 }
 
 export function setManagementCookie(context: Context, capability: string, secret: string): void {

@@ -1,3 +1,4 @@
+import { D1ThreadStore } from "./thread-db.js";
 import { D1LinkStore } from "./db.js";
 import { ItunesClient } from "./itunes.js";
 import { Resolver } from "./resolve.js";
@@ -55,6 +56,7 @@ export default {
       store: new D1LinkStore(env.DB),
       jamStore: new D1JamStore(env.DB, { maxJams: 10_000 }),
       jamsEnabled: jamsAreEnabled(env.JAMS_ENABLED, request.url),
+      threadStore: new D1ThreadStore(env.DB),
       baseUrl: getWorkerBaseUrl(env, request.url),
       appleMusic: createAppleMusicIssuer(env),
     }).fetch(request);

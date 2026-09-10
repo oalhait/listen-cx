@@ -7,7 +7,7 @@ export const THREAD_MUTATION_LIMIT = 2000;
 export const THREAD_CREATION_LIMIT = 10000;
 
 export class ThreadError extends Error {
-  constructor(public readonly status: 400 | 403 | 404 | 409 | 410 | 422 | 503, public readonly code: string, message: string) {
+  constructor(public readonly status: 400 | 403 | 404 | 409 | 410 | 413 | 422 | 502 | 503, public readonly code: string, message: string) {
     super(message);
   }
 }
@@ -50,6 +50,7 @@ export interface DesiredState {
   revision: number;
   closed: boolean;
   provider: Provider;
+  publication: PublicationStatus | null;
   identitiesComplete: boolean;
   entries: { contributionId: number; title: string; artist: string; identity: CatalogIdentity }[];
 }
@@ -118,5 +119,5 @@ export function desiredState(view: ThreadView, provider: Provider): DesiredState
         : { status: "verified", id: song.source.id, storefront: song.source.storefront };
     return { contributionId: song.id, title: song.title, artist: song.artist, identity };
   });
-  return { publicCapability: view.publicCapability, title: view.title, revision: view.revision, closed: view.closedAt !== null, provider, identitiesComplete: entries.every(entry => entry.identity.status === "verified"), entries };
+  return { publicCapability: view.publicCapability, title: view.title, revision: view.revision, closed: view.closedAt !== null, provider, publication: view.publications.find(publication => publication.provider === provider) ?? null, identitiesComplete: entries.every(entry => entry.identity.status === "verified"), entries };
 }

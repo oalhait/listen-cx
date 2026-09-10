@@ -1,4 +1,7 @@
 import { Hono } from "hono";
+import { readBoundedJson, isRecord } from "./request.js";
+import { createThreadApp } from "./thread-app.js";
+import type { D1ThreadStore } from "./thread-db.js";
 import type { Resolver } from "./resolve.js";
 import type { LinkStore } from "./db.js";
 import { prefersHtml, renderRecipient } from "./recipient.js";
@@ -8,63 +11,17 @@ import { handleMcpRequest } from "./mcp.js";
 import type { AppleMusicDeveloperToken } from "./apple-music-auth.js";
 import { getJam, JamActionError } from "./jams.js";
 
-const MAX_CREATE_BODY_BYTES = 4096;
-
-type BoundedJsonResult =
-  | { ok: true; value: unknown }
-  | { ok: false; status: 400 | 413; error: string };
-
-async function readBoundedJson(request: Request): Promise<BoundedJsonResult> {
-  const contentLength = Number(request.headers.get("content-length") ?? 0);
-  if (contentLength > MAX_CREATE_BODY_BYTES) {
-    return { ok: false, status: 413, error: "Request body is too large." };
-  }
-
-  try {
-    const reader = request.body?.getReader();
-    if (!reader) return { ok: false, status: 400, error: "Send a JSON request body." };
-
-    const chunks: Uint8Array[] = [];
-    let bodySize = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      bodySize += value.byteLength;
-      if (bodySize > MAX_CREATE_BODY_BYTES) {
-        try {
-          await reader.cancel();
-        } catch {}
-        return { ok: false, status: 413, error: "Request body is too large." };
-      }
-      chunks.push(value);
-    }
-
-    const rawBody = new Uint8Array(bodySize);
-    let offset = 0;
-    for (const chunk of chunks) {
-      rawBody.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return { ok: true, value: JSON.parse(new TextDecoder().decode(rawBody)) };
-  } catch {
-    return { ok: false, status: 400, error: "Send a valid JSON request body." };
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-export function createApp({ resolver, store, jamStore, jamsEnabled, baseUrl, appleMusic }: {
+export function createApp({ resolver, store, jamStore, jamsEnabled = false, baseUrl, appleMusic, threadStore }: {
   resolver: Pick<Resolver, "resolve">;
   store: LinkStore;
-  jamStore: JamStore;
-  jamsEnabled: boolean;
+  jamStore?: JamStore;
+  jamsEnabled?: boolean;
   baseUrl: string;
   appleMusic?: {
     allowedOrigins: readonly string[];
     issueDeveloperToken(): Promise<AppleMusicDeveloperToken>;
   };
+  threadStore?: D1ThreadStore;
 }) {
   const app = new Hono();
 
@@ -78,7 +35,7 @@ export function createApp({ resolver, store, jamStore, jamsEnabled, baseUrl, app
     try {
       const [linksReady, jamsReady] = await Promise.all([
         store.isReady(),
-        jamsEnabled ? jamStore.isReady() : Promise.resolve(true),
+        jamsEnabled && jamStore ? jamStore.isReady() : Promise.resolve(true),
       ]);
       if (linksReady && jamsReady) return c.json({ status: "ok" });
     } catch {}
@@ -126,7 +83,7 @@ export function createApp({ resolver, store, jamStore, jamsEnabled, baseUrl, app
     }
   });
 
-  app.all("/mcp", (c) => handleMcpRequest(c.req.raw, {
+  if (jamStore) app.all("/mcp", (c) => handleMcpRequest(c.req.raw, {
     resolver,
     store,
     jamStore,
@@ -135,7 +92,7 @@ export function createApp({ resolver, store, jamStore, jamsEnabled, baseUrl, app
   }));
 
   app.get("/api/jams/:jamId", async (c) => {
-    if (!jamsEnabled) return c.json({ error: "Not found." }, 404);
+    if (!jamsEnabled || !jamStore) return c.json({ error: "Not found." }, 404);
     c.header("Cache-Control", "private, no-store");
     c.header("Referrer-Policy", "no-referrer");
     c.header("X-Robots-Tag", "noindex, nofollow, noarchive");
@@ -148,6 +105,8 @@ export function createApp({ resolver, store, jamStore, jamsEnabled, baseUrl, app
       throw error;
     }
   });
+
+  if (threadStore) app.route("/", createThreadApp({ resolver, store: threadStore, baseUrl }));
 
   app.get("/:slug", async (c) => {
     c.header("Vary", "Accept");
