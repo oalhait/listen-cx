@@ -6,7 +6,7 @@ Research checked September 10, 2026 (UTC). Branch: `omar/apple-publishing-spike`
 
 **Do not promise full Apple Music sync yet.** The public Apple web/server surface supports creating library playlists and appending tracks, but the current documentation exposes no operation that removes tracks or replaces their order on an existing playlist. A stable provider ID and public link across `[A,B,C]` → `[C,A,D]` therefore have no established web implementation. This is a conclusion about the reviewed supported surfaces, not proof that no private commercial agreement could provide one. [Apple playlist API](https://developer.apple.com/documentation/applemusicapi/playlists-api)
 
-Keep the website's ordered revision authoritative and continue the separate Spotify route. The broader partner search closes the strongest apparent lead: TuneMyMusic's current compatibility table explicitly limits Apple sync to **Add Only**, contradicting its older blog's removal claim. MusicAPI.com's enterprise API also explicitly lacks the required Apple edits. Choose explicitly between delaying Apple full sync and offering **“Export a copy to Apple Music.”** A copy can represent one revision; it cannot carry a promise that previously saved playlists will update. A separate commercial agreement could reopen the question only with evidence of capabilities beyond these published restrictions. [TuneMyMusic compatibility](https://www.tunemymusic.com/features/supported), [MusicAPI compatibility](https://musicapi.com/docs/api-basics/supported-features/)
+Keep the website's ordered revision authoritative and continue the separate Spotify route. The broader partner search closes the strongest apparent lead: TuneMyMusic's current compatibility table explicitly limits Apple sync to **Add Only**, contradicting its older blog's removal claim. MusicAPI.com's enterprise API also explicitly lacks the required Apple edits. Apple publishing remains blocked under the current product scope; playlist export is not being restored. The copy/export alternatives below are research comparisons that would require a separate product decision. A separate commercial agreement could reopen full sync only with evidence of capabilities beyond these published restrictions. [TuneMyMusic compatibility](https://www.tunemymusic.com/features/supported), [MusicAPI compatibility](https://musicapi.com/docs/api-basics/supported-features/)
 
 The native spike is stopped regardless of whether its Mac crash could be fixed. Its runtime dependency already violates the web-only requirement. This research made no new provider writes, authorization attempts, or device changes.
 
@@ -74,13 +74,59 @@ These are alternatives for Omar to choose, not accepted replacements for full sy
 | Play the Thread through MusicKit JS | Website can present its current playback order | Listening happens in the website rather than the requested existing provider app |
 | Open individual Apple song links | Existing-app access to selected songs | No synchronized playlist |
 
-If a compromise is acceptable, **snapshot export is the smallest honest first feature**: authorize on the website, resolve and confirm Apple catalog entries, create a playlist for one explicit revision, then verify the ordered returned contents before showing success. Expose unmatched/unavailable songs instead of silently substituting recordings. Existing cross-provider catalog candidates remain candidates until verified. This is a proposed implementation, not a completed live export test; exact order, duplicates, empty lists, storefront behavior, and app-opening behavior still need focused validation.
+If a future product decision allows this compromise, snapshot export could authorize on the website, resolve and confirm Apple catalog entries, create a playlist for one explicit revision, then verify the ordered returned contents before showing success. It would expose unmatched/unavailable songs instead of silently substituting recordings. Existing cross-provider catalog candidates remain candidates until verified. This is an out-of-scope alternative, not a completed live export test; exact order, duplicates, empty lists, storefront behavior, and app-opening behavior would need focused validation.
 
 ## What would reopen the commercial path
 
-No reviewed published partner capability meets the contract. If Omar chooses to ask about an unpublished enterprise offering or roadmap, use a scoped commercial inquiry before any integration work, followed by a disposable acceptance test only if the vendor confirms support. Draft inquiry, not sent:
+### Follow-up investigation: additional routes checked September 10
 
-> We run a web-only collaborative playlist product. Your public compatibility table limits Apple Music sync to Add Only. Do you offer a supported commercial integration beyond that restriction, including removals and reorder while preserving the playlist ID and public URL? Users must not install our software or keep a native publisher/browser running. Please provide the embeddable API and licensing path, Apple authorization model, supported sources, latency, and whether people who saved the shared playlist receive edits. Can you demonstrate `[A,B,C]` becoming `[C,A,D]` on the same Apple playlist ID, with a second subscriber having saved it before the change?
+The resumed investigation checked routes beyond the already excluded Soundiiz, TuneMyMusic, and MusicAPI products. None supplied a documented web writer ready for an authorized mutation experiment. No browser consent, native execution, provider write, or change to Threads was needed for these checks.
+
+| Newly examined route | Primary evidence | Remaining unknown or reason it does not qualify |
+| --- | --- | --- |
+| Playlisty Replace Mode | The vendor describes removal/reorder mirroring using new iOS 16/iPadOS 16 playlist APIs, with app-created-playlist restrictions and no Mac support | Real native capability; requires an excluded publisher runtime. No supported server/browser replacement API established |
+| Linkfire partner API | Limited-partner API documents campaign links, marketing assets, properties, and cross-service scans | Real API and Apple partnership, but published operations do not write Apple playlist contents. Extra commercial capability is unknown |
+| SongShift commercial integration | Current homepage describes syncing additions; the consumer offering and Apple import integration are established | No public server API, same-ID replace operation, or saved-follower contract found. A commercial offering remains a qualification question |
+| Apple Music for Artists Set Lists | Apple's web tool creates and orders playlists for an artist's actual shows/tours | Restricted artist workflow and repertoire purpose; no arbitrary Thread publishing API established |
+| Tuned Global playlisting | Business playlist tools use its licensed repertoire, CMS, apps, and APIs | Controls playlists in a separate music service, not the listener's existing Apple Music library |
+
+[Playlisty's explanation](https://obdura.com/home/support/playlisty/replace-mode/) is particularly useful because it distinguishes a real replacement feature from a web implementation: the feature comes from native iOS APIs and works on playlists created through its new mode. This is supporting documentation only; no app was installed or run.
+
+Apple confirms its [Linkfire partnership](https://artists.apple.com/support/3395-value-linkfire-links) is for smart links and landing pages. Linkfire's [developer introduction](https://developer.linkfire.com/docs/introduction) and [endpoint categories](https://developer.linkfire.com/) match that scope. Marketing-link updates and scans do not establish writes to the destination playlist. The documented access contact is `api@linkfire.com`; documentation support is `api-support@linkfire.com`.
+
+SongShift's current [homepage](https://www.songshift.com/) describes its ongoing sync as additions and lists `support@songshift.com`. Its partnership does not establish that another website can use an equivalent integration. The [Apple Set Lists guide](https://artists.apple.com/support/5466-promote-shows-set-lists) limits tracks to songs performed at the artist's show or tour. Neither that tool nor Linkfire should be repurposed as a generic playlist-publishing permission. [Tuned Global's business playlist tool](https://www.tunedglobal.com/streaming-services/playlisting-tool-for-business) instead describes its own licensed playback environment, which changes the listening product.
+
+Broad API/white-label searches also surfaced Welele's indexed enterprise API-access claim, but its public site returned HTTP 403 to direct inspection and no readable API specification or same-ID edit contract was found. That lead is **unqualified**, not evidence of a working route or a recommendation to buy access. [Vendor site](https://flowelele.com/)
+
+### Browser MusicKit: the apparent replacement methods change playback
+
+The fresh [MusicKit JS v3 instance reference](https://js-cdn.music.apple.com/musickit/v3/docs/iframe.html?path=%2Fstory%2Freference-javascript-musickit-instance--page) documents `setQueue`, `clearQueue`, `playAt`, `playNext`, and `playLater`. Their return values and state are the current playback `Queue`; `setQueue` accepts songs or a catalog resource. `clearQueue` even leaves the current item playing. These operations can change a browser's playback sequence but provide no documented persistent playlist ID or saved-follower update operation.
+
+The v3 documentation's Cloud Library section directs calls through the Apple Music web service using `v1/me/library` paths. No additional playlist removal/reorder entry point was found. A browser demo that changes its local queue from `[A,B,C]` to `[C,A,D]` would prove playback behavior only. It would not meet this spike's acceptance criteria, so no such substitute demo or repeated create/append experiment was run. No undocumented HTTP methods were probed.
+
+### Ready-to-send qualification drafts — none sent
+
+**First: Apple Developer Support.** Use the official [code-level support request](https://developer.apple.com/support/technical/), or its linked Developer Forums/Feedback Assistant paths. This is a question about a supported capability, not a request for private Apple implementation details.
+
+> Subject: Supported browser/server replacement of an Apple Music playlist
+>
+> We have a web-only collaborative playlist product. After subscriber authorization, we need one existing Apple playlist to change from ordered songs `[A,B,C]` to `[C,A,D]` while retaining its provider ID and public URL. Listeners must see the change in a shared playlist they saved before the edit. We reviewed Apple Music API playlist creation/appending, MusicKit JS v3 playback queues, and the DTS clarification that collaborative playlists have `canEdit=false`. Native MusicLibrary editing cannot meet our web-only runtime requirement. Is there a documented browser/server operation, entitlement, or supported partner program that meets this use case? Please identify the operation and access requirements. If unavailable, please confirm the appropriate enhancement-request category.
+
+**Second: SongShift.** Address `support@songshift.com`, the contact published on its website, and ask for routing to business/developer partnerships. Its public additions/import functionality is not sufficient by itself.
+
+> Subject: Commercial web API for same-playlist Apple Music synchronization
+>
+> Do you offer a licensed server/browser integration for third-party products beyond consumer playlist imports and addition monitoring? We need to replace `[A,B,C]` with `[C,A,D]` on one Apple Music playlist, preserving its ID, public link, and updates to a second subscriber's previously saved shared playlist. No custom native app, user-device publishing process, or continuously open browser may be required. If supported, please provide API documentation, Apple authorization requirements, accepted catalog identifiers, job/readback interfaces, latency expectations, and commercial access terms. A copy or append-only destination would not meet this request.
+
+**Third, lower priority: Linkfire.** Address `api@linkfire.com`. The published API scope does not qualify; this asks only whether a distinct supported offering exists.
+
+> Subject: Does a Linkfire partner API write Apple Music playlist contents?
+>
+> Your public API documents campaign links and cross-service scans. Does any licensed partner offering also replace the ordered contents of an existing Apple Music playlist, including removals and reorder, while preserving its provider ID and public URL? If yes, please provide that distinct API's documentation and confirm browser/server execution plus propagation to existing saved subscribers. If your integration only resolves links, creates marketing pages, or adds library content, please confirm that boundary.
+
+**Next experiment entry condition:** receive a supported operation and access contract capable of removal/reorder on one identity. Then implement its isolated adapter with failing contract tests first and run the acceptance sequence below against a disposable destination, using actual provider readback. Authorization setup alone, SDK types, an API subscription, successful appends, or a vendor's general “sync” label do not meet this entry condition. With no candidate passing it yet, the completed independent work is the source-backed route assessment and these concrete unsent drafts.
+
+### Qualification and acceptance after a positive answer
 
 Require a written answer distinguishing current Apple support from generic sync features. Establish whether the integration accepts exact catalog IDs or rematches tracks, whether a Spotify source is required, whether we can trigger and observe jobs, and how revocation, retries, rate limits, stale jobs, and ambiguous creation are reported. The mechanism must be a supported commercial API; private endpoint replay, copied first-party sessions, user credentials, or UI automation are outside this design.
 
@@ -91,7 +137,7 @@ Acceptance must independently establish:
 3. Actual propagation delay and required refresh behavior. A new playlist with the same name, updated website redirect, logged-out page alone, or publisher-only success does not pass.
 4. Repeated revisions, duplicates, empty lists, missing tracks/storefront mismatches, authorization revocation, and interrupted operations. Failure must remain visible and must not silently create replacement destinations or claim a partial revision is synchronized.
 
-Without that evidence, keep Apple full-sync capability unavailable and present any chosen export behavior by its actual contract. This document changes research guidance only; it does not alter the Worker, storage, UI, provider clients, or existing playlists.
+Without that evidence, keep Apple full-sync capability unavailable. This document changes research guidance only; it does not alter the Worker, storage, UI, provider clients, or existing playlists.
 
 ## Historical native publisher investigation — stopped
 
