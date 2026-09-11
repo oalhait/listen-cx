@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { authorizationError, appleCallback, authorizeSubscriber, tokenLifetime, authorizationDiagnostic } from './web-authorization.mjs';
+import { authorizationError, appleCallback, authorizeSubscriber, tokenLifetime, authorizationDiagnostic, popupRelationship, readAuthorizedStorefront } from './web-authorization.mjs';
 
 test('reports only allowlisted error fields and never copies credentials or arbitrary messages', () => {
   const secret = 'private-token-value';
@@ -50,4 +50,24 @@ test('persists only bounded diagnostic fields even when a caller submits secrets
   const result = authorizationDiagnostic({ type: 'operation-error', reason: 'AUTHORIZATION_ERROR', httpStatus: 403, isAuthorized: false, remainingSeconds: 700, message: 'secret-value', token: 'secret-value', at: 'secret-value' });
   assert.deepEqual(result, { type: 'operation-error', reason: 'AUTHORIZATION_ERROR', httpStatus: 403, isAuthorized: false, remainingSeconds: 700 });
   assert.deepEqual(authorizationDiagnostic({ type: 'secret-value', reason: 'secret-value', method: 'secret-value', remainingSeconds: 'secret-value' }), { type: 'unknown' });
+});
+
+test('observes popup closure and opener relationship without reading its page or credentials', () => {
+  const host = {};
+  const popup = { closed: false, opener: host, get location() { throw new Error('Must not inspect the auth URL'); } };
+  expectRelationship(popupRelationship(popup, host), false, true);
+  expectRelationship(popupRelationship({ closed: true, opener: null }, host), true, false);
+  expectRelationship(popupRelationship({ get closed() { throw new Error('Severed'); }, get opener() { throw new Error('Severed'); } }, host), null, null);
+});
+
+function expectRelationship(value, closed, openerMatches) {
+  assert.deepEqual(value, { popupClosed: closed, openerMatches });
+}
+
+test('proves authorized API readback using only the returned storefront', async () => {
+  const calls = [];
+  const storefront = await readAuthorizedStorefront({ api: { async music(path) { calls.push(path); return { data: { data: [{ id: 'us' }] } }; } } });
+  assert.equal(storefront, 'us');
+  assert.deepEqual(calls, ['/v1/me/storefront']);
+  await assert.rejects(readAuthorizedStorefront({ api: { async music() { return { data: { data: [] } }; } } }), /STOREFRONT_READBACK_FAILED/);
 });

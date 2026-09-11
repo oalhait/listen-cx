@@ -54,7 +54,31 @@ The actual September 11 attempt at 07:10:43.886 UTC returned a popup handle. At 
 
 The diagnostic listener matches the current SDK's transport: `window` message events from `https://authorize.music.apple.com`, object payloads with `jsonrpc: "2.0"`, and every request method that can resolve or reject authorization. MusicKit collapses rejection details and calls `unauthorize()`, which emits `NOT_DETERMINED` (`0`). That status is not evidence that the user denied permission. Without a callback, the SDK's popup-closed polling path is the strongest explanation. This remains an inference: a [severed window context](https://developer.mozilla.org/en-US/docs/Web/API/Window/open#return_value) can also report `closed: true` while a popup still exists.
 
-Live local headers contain no COOP, COEP, or sandbox policy. The harness preserves the SDK's popup features and adds no `noopener` or `noreferrer`; its Referrer-Policy does not itself sever the opener, and MusicKit explicitly passes the local URL as its referrer query. CSP and localhost request-origin checks do not filter `postMessage`. No supported evidence justifies weakening those protections. The missing observation is the popup's non-secret visible status immediately before failure and whether it remains open when the parent reports the error. That distinguishes a broken opener relationship from actual popup closure or an Apple-side error. No further authorization attempt, browser manipulation, or provider creation was performed for this source/code diagnosis.
+Live local headers contain no COOP, COEP, or sandbox policy. The harness preserves the SDK's popup features and adds no `noopener` or `noreferrer`; its Referrer-Policy does not itself sever the opener, and MusicKit explicitly passes the local URL as its referrer query. CSP and localhost request-origin checks do not filter `postMessage`. No supported evidence justifies weakening those protections. Omar subsequently confirmed that the popup closed when he clicked **Allow**. He completed visible consent; this was not a cancellation. The remaining issue is delivery of that consent result to MusicKit, including an Apple-side return failure or a lost opener/callback connection. No further authorization attempt, browser manipulation, or provider creation was performed for this source/code diagnosis.
+
+### Controlled HTTPS-origin experiment
+
+`spikes/apple-publisher/https-auth/` now provides an isolated authorization-only Worker at [the dev probe host](https://listen-cx-apple-auth-spike-dev.omar-alhait.workers.dev). It uses the same developer signing credentials, 15-minute token claims, MusicKit v3 distribution, MusicKit app configuration, and CSP/referrer policy as the local harness. The changed variable is its dedicated HTTPS origin and browser session. It checks `isAuthorized` after consent, then verifies only `GET /v1/me/storefront`; it has no playlist creation, recreation journal, provider proxy, or local-control routes.
+
+Access requires a short-lived invitation. The private local invitation HTML carries an opaque fragment capability; the probe removes that fragment before loading MusicKit and exchanges it for an HttpOnly, Secure, SameSite=Strict cookie. Token delivery requires that cookie and a same-origin browser request. Other origins, expired sessions, and unknown paths are rejected. The Apple signing key remains local. The Worker receives only an expiring developer JWT and invitation digest as secret bindings; Music User Tokens remain with MusicKit and never reach this Worker. Diagnostics remain in the browser, including popup-closed and opener-match booleans observed at opening and settlement, never popup URLs or credential content.
+
+The dedicated config has only `env.dev`, an empty route list, disabled preview URLs and observability, three allowlisted static assets, and no database, Durable Object, service binding, or production configuration. It does not use `staging.listen.cx` or alter the Spotify spike. Its compatibility date matches the installed project runtime (`2026-07-13`); the initially selected September date exceeded the local runtime's supported date, so no dependency upgrade was introduced.
+
+Preparation and deployment commands, run from the repository root:
+
+```sh
+node spikes/apple-publisher/https-auth/build.mjs
+pnpm exec vitest run --config spikes/apple-publisher/https-auth/vitest.config.ts
+pnpm exec tsc --project spikes/apple-publisher/https-auth/tsconfig.json
+pnpm exec wrangler deploy --config spikes/apple-publisher/https-auth/wrangler.jsonc --env dev --dry-run
+doppler run --project listen-cx --config dev_personal -- node spikes/apple-publisher/https-auth/prepare-session.mjs
+pnpm exec wrangler deploy --config spikes/apple-publisher/https-auth/wrangler.jsonc --env dev --secrets-file spikes/apple-publisher/.local/https-secrets.json
+node spikes/apple-publisher/https-auth/remote-smoke.mjs
+```
+
+The private invitation is `spikes/apple-publisher/.local/https-invitation.html`; all session files and generated assets are ignored by Git. It expires with the test token. An expired session requires a newly prepared and redeployed session, not repeated consent against the expired one.
+
+Validation: 18 focused Node tests and five Workers-runtime tests passed, alongside the affected TypeScript check and deployment dry run. Tests include no-popup and false-success regressions, opener observation privacy, actual storefront response validation, invitation and cookie gating, expiry, cross-origin isolation, and cross-site landing navigation without cross-site token access. Deployment version `d1a558a2-2685-430a-aaff-541b4c7317ec` serves only `listen-cx-apple-auth-spike-dev`. Remote checks at September 11 07:35:22 UTC returned landing **200**, unauthenticated token **401**, foreign-origin session **403**, local publishing-control path **404**, protected session **204**, and protected token **200** with `no-store`. These verify hosting and isolation, not Apple consent. The first HTTPS consent attempt and storefront readback are pending; no provider playlist has been created.
 
 ## What the supported Apple surfaces provide
 
