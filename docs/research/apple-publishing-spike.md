@@ -48,6 +48,14 @@ The page and local `/authorization-diagnostics` endpoint expose only allowlisted
 
 This fixes the harness's pending-popup failure handling; it does not establish that all reported failures had that cause. A normal Chrome attempt opened Apple's popup, but its final outcome could not be read from the available browser surface. Browser authorization and live playlist creation remain unproven. Reload the local page once to load the fix and fresh diagnostics; a normal browser is required if the recorded outcome is `POPUP_BLOCKED`. Sixteen focused authorization, server, and recreation tests pass, plus browser-module syntax and diff checks. No playlist creation or change to Threads occurred during this diagnosis.
 
+### Follow-up: popup opened, then authorization failed
+
+The actual September 11 attempt at 07:10:43.886 UTC returned a popup handle. At 07:11:08.491, 24.605 seconds later, it recorded authorization status `0` and `AUTHORIZATION_ERROR`, with 874 seconds remaining on the developer token. No trusted Apple callback was recorded. This attempt therefore was not the blocked-popup or expired-token case.
+
+The diagnostic listener matches the current SDK's transport: `window` message events from `https://authorize.music.apple.com`, object payloads with `jsonrpc: "2.0"`, and every request method that can resolve or reject authorization. MusicKit collapses rejection details and calls `unauthorize()`, which emits `NOT_DETERMINED` (`0`). That status is not evidence that the user denied permission. Without a callback, the SDK's popup-closed polling path is the strongest explanation. This remains an inference: a [severed window context](https://developer.mozilla.org/en-US/docs/Web/API/Window/open#return_value) can also report `closed: true` while a popup still exists.
+
+Live local headers contain no COOP, COEP, or sandbox policy. The harness preserves the SDK's popup features and adds no `noopener` or `noreferrer`; its Referrer-Policy does not itself sever the opener, and MusicKit explicitly passes the local URL as its referrer query. CSP and localhost request-origin checks do not filter `postMessage`. No supported evidence justifies weakening those protections. The missing observation is the popup's non-secret visible status immediately before failure and whether it remains open when the parent reports the error. That distinguishes a broken opener relationship from actual popup closure or an Apple-side error. No further authorization attempt, browser manipulation, or provider creation was performed for this source/code diagnosis.
+
 ## What the supported Apple surfaces provide
 
 | Surface | Documented behavior | Consequence for this product |
