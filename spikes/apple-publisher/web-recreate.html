@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Apple Music recreation test</title></head>
+<body>
+<h1>Apple Music recreation test</h1>
+<p>This isolated test creates at most two clearly named disposable playlists: A–B–C, then C–A–D. It preserves every existing playlist.</p>
+<p>Authorize your Apple Music account, then create each revision. Readback checks the actual provider order and public-link fields.</p>
+<button id="authorize" disabled>Authorize Apple Music</button>
+<button id="first" disabled>Create revision 1: A–B–C</button>
+<button id="second" disabled>Create revision 2: C–A–D</button>
+<button id="read" disabled>Read both playlists again</button>
+<pre id="status">Loading MusicKit…</pre>
+<script type="module" src="/web-recreate-browser.mjs"></script>
+</body></html>

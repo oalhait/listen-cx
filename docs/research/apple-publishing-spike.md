@@ -1,14 +1,42 @@
 # Apple Music web playlist sync research
 
-Research checked September 10, 2026 (UTC). Branch: `omar/apple-publishing-spike`. This decision supersedes the native publisher investigation below. **The product is web-only:** people collaborate on an ordered Thread on our website, then listen in their existing Spotify or Apple Music app. No companion app, device provisioning, or native publisher runtime is part of the proposed product.
+Research and browser-spike preparation checked September 11, 2026 (UTC). Branch: `omar/apple-publishing-spike`. This decision supersedes the native publisher investigation below. **The product is web-only:** people collaborate on an ordered Thread on our website, then listen in their existing Spotify or Apple Music app. No companion app, device provisioning, or native publisher runtime is part of the proposed product.
 
 ## Recommendation
 
 **Do not promise full Apple Music sync yet.** The public Apple web/server surface supports creating library playlists and appending tracks, but the current documentation exposes no operation that removes tracks or replaces their order on an existing playlist. A stable provider ID and public link across `[A,B,C]` → `[C,A,D]` therefore have no established web implementation. This is a conclusion about the reviewed supported surfaces, not proof that no private commercial agreement could provide one. [Apple playlist API](https://developer.apple.com/documentation/applemusicapi/playlists-api)
 
-Keep the website's ordered revision authoritative and continue the separate Spotify route. The broader partner search closes the strongest apparent lead: TuneMyMusic's current compatibility table explicitly limits Apple sync to **Add Only**, contradicting its older blog's removal claim. MusicAPI.com's enterprise API also explicitly lacks the required Apple edits. Apple publishing remains blocked under the current product scope; playlist export is not being restored. The copy/export alternatives below are research comparisons that would require a separate product decision. A separate commercial agreement could reopen full sync only with evidence of capabilities beyond these published restrictions. [TuneMyMusic compatibility](https://www.tunemymusic.com/features/supported), [MusicAPI compatibility](https://musicapi.com/docs/api-basics/supported-features/)
+**Recreating the entire playlist per revision is technically supported and is now the active isolated experiment.** A website pointer could select the newest verified playlist for fresh opens. This changes provider identity; it does not update an already-saved Apple reference. Product adoption remains undecided. Keep the website's ordered revision authoritative and continue the separate Spotify route. The broader partner search closes the strongest apparent lead: TuneMyMusic's current compatibility table explicitly limits Apple sync to **Add Only**, contradicting its older blog's removal claim. MusicAPI.com's enterprise API also explicitly lacks the required Apple edits. Apple publishing remains blocked under the current product scope; playlist export is not being restored. The copy/export alternatives below are research comparisons that would require a separate product decision. A separate commercial agreement could reopen full sync only with evidence of capabilities beyond these published restrictions. [TuneMyMusic compatibility](https://www.tunemymusic.com/features/supported), [MusicAPI compatibility](https://musicapi.com/docs/api-basics/supported-features/)
 
-The native spike is stopped regardless of whether its Mac crash could be fixed. Its runtime dependency already violates the web-only requirement. This research made no new provider writes, authorization attempts, or device changes.
+The native spike is stopped regardless of whether its Mac crash could be fixed. Its runtime dependency already violates the web-only requirement. The web experiment below starts fresh browser authorization; native execution remains stopped.
+
+## Full resync: three different operations
+
+| Meaning of full resync | Supported web operation found | Result |
+| --- | --- | --- |
+| Replace every track on the same ID | None in the reviewed Apple REST or MusicKit JS documentation | Same-ID removal and reorder remain blocked |
+| Clear the same ID, then append the whole revision | Append exists; clear/remove does not | Cannot implement this sequence through the reviewed supported surface |
+| Create a new playlist with the whole revision, then switch the website pointer | `POST /v1/me/library/playlists` with initial track relationships | Feasible recreation model; distinct provider identity for every revision |
+
+The [MusicKit JS generic API](https://js-cdn.music.apple.com/musickit/v3/docs/index.html?path=/story/reference-javascript-api--page) accepts `music(path, queryParameters, { fetchOptions })`, so documented POST operations are available even without a convenience helper. It automatically supplies subscriber authorization for personalized requests. The limitation is the absence of a documented replace/clear endpoint, not the absence of generic HTTP access.
+
+Recreation preserves website order by publishing a complete new snapshot and moving the pointer only after readback. That pointer behavior is a design inference, not an implemented Threads feature. A listener reopening the website could reach the newest revision, provided a usable Apple destination URL is available. A listener who already saved the old provider ID has no documented automatic migration path. Saved-listener continuity has not been independently tested. Each revision also leaves another playlist in the publisher's library; no cleanup/delete operation is used or assumed.
+
+### Bounded browser recreation experiment
+
+`spikes/apple-publisher/web-recreate*` is isolated from the Worker, Threads, and native code. It uses the existing ignored four-song fixtures for `[A,B,C]` and `[C,A,D]`, checks catalog availability in the authorized subscriber's storefront, and allows at most two clearly named `DISPOSABLE listen.cx web <run> R<n>` playlists. It requests `isPublic: true` because Apple's [creation example](https://developer.apple.com/documentation/applemusicapi/create-a-new-library-playlist) documents it, but the request attribute schema omits that field and the example response is private. A request flag therefore does not prove public sharing works.
+
+The harness records a reservation before each provider POST, persists returned IDs, and refuses retries after an uncertain creation, including across reloads and server restarts. It rereads actual library contents, compares exact catalog IDs and order, keeps unresolved IDs explicit, and records public/catalog/URL fields. It creates revision 2 only after revision 1 reads correctly and rereads revision 1 afterward. Existing playlists are preserved. A public URL, if returned, must still receive independent public readback before a shareability claim. No saved-follower claim follows from this two-playlist test.
+
+```sh
+doppler run --project listen-cx --config dev_personal -- node spikes/apple-publisher/web-recreate-server.mjs
+```
+
+Open `http://127.0.0.1:8794` in a normal browser, choose **Authorize Apple Music**, and complete Apple's own sign-in and consent. The two creation buttons remain separate from authorization. **Current live status:** MusicKit v3 initialized successfully; normal Chrome opened Apple's sign-in popup and reached the two-factor verification prompt. That attempt returned without authorization; the page is ready to reopen sign-in when Omar completes it. Subscriber consent remains required. No provider playlist has been created, and ordered/public readback has not run. The Codex in-app browser initialized MusicKit but did not expose its authorization popup; normal Chrome did.
+
+The local server mints 15-minute developer JWTs from the existing Doppler environment and restricts its token route to same-origin browser requests. Private keys stay in the local server; Music User Tokens stay with MusicKit and are not copied into the journal or logs. Same-machine processes are trusted in this local spike. The ignored `.local/web-recreate-journal.json` stores reservations, IDs, and readback evidence. Preserve that file: removing it would remove the two-creation fence.
+
+Validation: nine focused Node tests pass, covering creation request shape, the two-revision limit, duplicate/uncertain IDs, persistence across restart and competing tabs, returned order/unresolved IDs, truncated readback, token isolation, and same-origin restrictions. These fixture tests prove harness behavior only; live Apple acceptance remains pending browser consent. No product export flow, Threads publication adapter, native runtime change, deployment, or vendor outreach is included.
 
 ## What the supported Apple surfaces provide
 
@@ -102,29 +130,11 @@ Broad API/white-label searches also surfaced Welele's indexed enterprise API-acc
 
 The fresh [MusicKit JS v3 instance reference](https://js-cdn.music.apple.com/musickit/v3/docs/iframe.html?path=%2Fstory%2Freference-javascript-musickit-instance--page) documents `setQueue`, `clearQueue`, `playAt`, `playNext`, and `playLater`. Their return values and state are the current playback `Queue`; `setQueue` accepts songs or a catalog resource. `clearQueue` even leaves the current item playing. These operations can change a browser's playback sequence but provide no documented persistent playlist ID or saved-follower update operation.
 
-The v3 documentation's Cloud Library section directs calls through the Apple Music web service using `v1/me/library` paths. No additional playlist removal/reorder entry point was found. A browser demo that changes its local queue from `[A,B,C]` to `[C,A,D]` would prove playback behavior only. It would not meet this spike's acceptance criteria, so no such substitute demo or repeated create/append experiment was run. No undocumented HTTP methods were probed.
+The v3 documentation's Cloud Library section directs calls through the Apple Music web service using `v1/me/library` paths. No additional playlist removal/reorder entry point was found. A browser demo that changes its local queue from `[A,B,C]` to `[C,A,D]` would prove playback behavior only. It would not meet this spike's acceptance criteria, so no such playback substitute demo was run. The separate recreation experiment above tests a deliberately different provider-identity model. No undocumented HTTP methods were probed.
 
-### Ready-to-send qualification drafts — none sent
+### Commercial outreach is not being pursued
 
-**First: Apple Developer Support.** Use the official [code-level support request](https://developer.apple.com/support/technical/), or its linked Developer Forums/Feedback Assistant paths. This is a question about a supported capability, not a request for private Apple implementation details.
-
-> Subject: Supported browser/server replacement of an Apple Music playlist
->
-> We have a web-only collaborative playlist product. After subscriber authorization, we need one existing Apple playlist to change from ordered songs `[A,B,C]` to `[C,A,D]` while retaining its provider ID and public URL. Listeners must see the change in a shared playlist they saved before the edit. We reviewed Apple Music API playlist creation/appending, MusicKit JS v3 playback queues, and the DTS clarification that collaborative playlists have `canEdit=false`. Native MusicLibrary editing cannot meet our web-only runtime requirement. Is there a documented browser/server operation, entitlement, or supported partner program that meets this use case? Please identify the operation and access requirements. If unavailable, please confirm the appropriate enhancement-request category.
-
-**Second: SongShift.** Address `support@songshift.com`, the contact published on its website, and ask for routing to business/developer partnerships. Its public additions/import functionality is not sufficient by itself.
-
-> Subject: Commercial web API for same-playlist Apple Music synchronization
->
-> Do you offer a licensed server/browser integration for third-party products beyond consumer playlist imports and addition monitoring? We need to replace `[A,B,C]` with `[C,A,D]` on one Apple Music playlist, preserving its ID, public link, and updates to a second subscriber's previously saved shared playlist. No custom native app, user-device publishing process, or continuously open browser may be required. If supported, please provide API documentation, Apple authorization requirements, accepted catalog identifiers, job/readback interfaces, latency expectations, and commercial access terms. A copy or append-only destination would not meet this request.
-
-**Third, lower priority: Linkfire.** Address `api@linkfire.com`. The published API scope does not qualify; this asks only whether a distinct supported offering exists.
-
-> Subject: Does a Linkfire partner API write Apple Music playlist contents?
->
-> Your public API documents campaign links and cross-service scans. Does any licensed partner offering also replace the ordered contents of an existing Apple Music playlist, including removals and reorder, while preserving its provider ID and public URL? If yes, please provide that distinct API's documentation and confirm browser/server execution plus propagation to existing saved subscribers. If your integration only resolves links, creates marketing pages, or adds library content, please confirm that boundary.
-
-**Next experiment entry condition:** receive a supported operation and access contract capable of removal/reorder on one identity. Then implement its isolated adapter with failing contract tests first and run the acceptance sequence below against a disposable destination, using actual provider readback. Authorization setup alone, SDK types, an API subscription, successful appends, or a vendor's general “sync” label do not meet this entry condition. With no candidate passing it yet, the completed independent work is the source-backed route assessment and these concrete unsent drafts.
+Omar explicitly ruled out contacting Apple or SongShift. The previous unsent outreach drafts have been removed; no message was sent and no new draft is planned. The active work is the supported browser recreation experiment above. Same-ID commercial acceptance criteria below remain a reference if independently obtained capabilities ever change the evidence.
 
 ### Qualification and acceptance after a positive answer
 
