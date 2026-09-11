@@ -12,6 +12,7 @@ describe('isolated HTTPS Apple authorization probe', () => {
     expect((await SELF.fetch(`${origin}/session`, { method: 'POST', headers, body: JSON.stringify({ invite: 'b'.repeat(64) }) })).status).toBe(401);
     const session = await SELF.fetch(`${origin}/session`, { method: 'POST', headers, body: JSON.stringify({ invite }) });
     expect(session.status).toBe(204);
+    expect(session.headers.get('Referrer-Policy')).toBe('no-referrer');
     const cookie = session.headers.get('set-cookie')!;
     expect(cookie).toContain('HttpOnly');
     expect(cookie).toContain('Secure');
@@ -19,6 +20,7 @@ describe('isolated HTTPS Apple authorization probe', () => {
     const token = await SELF.fetch(`${origin}/developer-token`, { headers: { ...headers, Cookie: cookie.split(';')[0]! } });
     expect(token.status).toBe(200);
     expect(token.headers.get('Cache-Control')).toBe('no-store');
+    expect(token.headers.get('Referrer-Policy')).toBe('no-referrer');
     expect(token.headers.get('Access-Control-Allow-Origin')).toBeNull();
     expect((await token.json<{ developerToken: string }>()).developerToken).toBe(env.DEVELOPER_TOKEN);
   });
@@ -44,6 +46,19 @@ describe('isolated HTTPS Apple authorization probe', () => {
     const source = await (await SELF.fetch(`${origin}/probe.mjs`)).text();
     expect(source).toContain('readAuthorizedStorefront');
     expect(source).not.toContain('/v1/me/library/playlists');
+  });
+
+  it('shares only the origin from authorization pages so Apple can establish its callback channel', async () => {
+    for (const path of ['/', '/control']) {
+      const page = await SELF.fetch(`${origin}${path}`);
+      expect(page.status).toBe(200);
+      expect(page.headers.get('Referrer-Policy')).toBe('strict-origin');
+      expect(page.headers.get('Cache-Control')).toContain('no-store');
+    }
+    for (const path of ['/probe.mjs', '/control.mjs', '/developer-token', '/missing']) {
+      const response = await SELF.fetch(`${origin}${path}`, { headers });
+      expect(response.headers.get('Referrer-Policy')).toBe('no-referrer');
+    }
   });
 
   it('permits opening the invitation from another site without permitting cross-site API access', async () => {

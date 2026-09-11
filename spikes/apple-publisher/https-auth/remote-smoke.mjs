@@ -11,7 +11,7 @@ const headers = { Origin: origin, 'Content-Type': 'application/json', 'Sec-Fetch
 const landing = await new Promise((resolve, reject) => {
   get(`${origin}${direct ? '/control' : '/'}`, { headers: { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document' } }, response => {
     response.resume();
-    resolve(response.statusCode);
+    resolve({ status: response.statusCode, referrerPolicy: response.headers['referrer-policy'] });
   }).on('error', reject);
 });
 const publicToken = await fetch(`${origin}/developer-token`, { headers });
@@ -20,8 +20,10 @@ const localControl = await fetch(`${origin}/reserve`, { method: 'POST', headers,
 const session = await fetch(`${origin}/session`, { method: 'POST', headers, body: JSON.stringify({ invite }) });
 const cookie = session.headers.get('set-cookie')?.split(';')[0];
 assert.equal(session.status, 204, 'Protected test session failed');
+assert.equal(session.headers.get('Referrer-Policy'), 'no-referrer');
 assert.ok(cookie, 'Protected test cookie is missing');
 const token = await fetch(`${origin}/developer-token`, { headers: { ...headers, Cookie: cookie } });
+assert.equal(token.headers.get('Referrer-Policy'), 'no-referrer');
 if (direct) {
   for (const name of ['control.html', 'control.mjs', 'message-diagnostic.mjs']) {
     const response = await fetch(`${origin}/${name === 'control.html' ? 'control' : name}`);
@@ -29,8 +31,9 @@ if (direct) {
     assert.equal(await response.text(), await readFile(new URL(name, import.meta.url), 'utf8'), 'Direct control asset differs from checked source');
   }
 }
-const result = { at: new Date().toISOString(), mode: direct ? 'direct-sdk' : 'observed-popup', landing, publicToken: publicToken.status, foreignSession: foreignSession.status, localControl: localControl.status, protectedSession: session.status, protectedToken: token.status, tokenCache: token.headers.get('Cache-Control') };
+const result = { at: new Date().toISOString(), mode: direct ? 'direct-sdk' : 'observed-popup', landing: landing.status, landingReferrerPolicy: landing.referrerPolicy, publicToken: publicToken.status, foreignSession: foreignSession.status, localControl: localControl.status, protectedSession: session.status, protectedToken: token.status, tokenCache: token.headers.get('Cache-Control') };
 assert.equal(result.landing, 200);
+assert.equal(result.landingReferrerPolicy, 'strict-origin');
 assert.equal(result.publicToken, 401);
 assert.equal(result.foreignSession, 403);
 assert.equal(result.localControl, 404);

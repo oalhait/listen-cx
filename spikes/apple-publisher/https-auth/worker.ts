@@ -32,11 +32,12 @@ export default {
     if (url.origin !== probeOrigin) return json({ error: 'wrong_origin' }, 404);
     const requestOrigin = request.headers.get('Origin');
     const fetchSite = request.headers.get('Sec-Fetch-Site');
-    const landingNavigation = request.method === 'GET' && ['/', '/control'].includes(url.pathname) && request.headers.get('Sec-Fetch-Mode') === 'navigate' && request.headers.get('Sec-Fetch-Dest') === 'document';
+    const authorizationPage = ['/', '/control'].includes(url.pathname);
+    const landingNavigation = request.method === 'GET' && authorizationPage && request.headers.get('Sec-Fetch-Mode') === 'navigate' && request.headers.get('Sec-Fetch-Dest') === 'document';
     if (!landingNavigation && ((requestOrigin && requestOrigin !== probeOrigin) || (fetchSite && !['none', 'same-origin'].includes(fetchSite)))) return json({ error: 'wrong_origin' }, 403);
     if (request.method === 'GET' && assetPaths.has(url.pathname)) {
       const asset = await env.ASSETS.fetch(request);
-      return new Response(asset.body, { status: asset.status, headers: { ...Object.fromEntries(asset.headers), ...headers } });
+      return new Response(asset.body, { status: asset.status, headers: { ...Object.fromEntries(asset.headers), ...headers, 'Referrer-Policy': authorizationPage ? 'strict-origin' : headers['Referrer-Policy'] } });
     }
     if (!['/session', '/developer-token'].includes(url.pathname)) return json({ error: 'not_found' }, 404);
     if (!env.DEVELOPER_TOKEN || !/^[a-f0-9]{64}$/.test(env.INVITE_DIGEST)) return json({ error: 'dev_probe_not_configured' }, 503);
