@@ -75,6 +75,7 @@ describe('isolated HTTPS Apple authorization probe', () => {
     expect(script.status).toBe(200);
     expect(await script.text()).not.toContain(env.DEVELOPER_TOKEN);
     expect((await SELF.fetch(`${origin}/message-diagnostic.mjs`)).status).toBe(200);
+    expect((await SELF.fetch(`${origin}/credential-pairing.mjs`)).status).toBe(200);
     expect((await SELF.fetch(`${origin}/control`, { method: 'POST' })).status).toBe(404);
   });
 

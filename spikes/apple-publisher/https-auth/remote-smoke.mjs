@@ -25,10 +25,10 @@ assert.ok(cookie, 'Protected test cookie is missing');
 const token = await fetch(`${origin}/developer-token`, { headers: { ...headers, Cookie: cookie } });
 assert.equal(token.headers.get('Referrer-Policy'), 'no-referrer');
 if (direct) {
-  for (const name of ['control.html', 'control.mjs', 'message-diagnostic.mjs']) {
+  for (const name of ['control.html', 'control.mjs', 'message-diagnostic.mjs', 'credential-pairing.mjs', 'web-authorization.mjs']) {
     const response = await fetch(`${origin}/${name === 'control.html' ? 'control' : name}`);
     assert.equal(response.status, 200, 'Direct control asset unavailable');
-    assert.equal(await response.text(), await readFile(new URL(name, import.meta.url), 'utf8'), 'Direct control asset differs from checked source');
+    assert.equal(await response.text(), await readFile(new URL(name === 'web-authorization.mjs' ? '../web-authorization.mjs' : name, import.meta.url), 'utf8'), 'Direct control asset differs from checked source');
   }
 }
 const result = { at: new Date().toISOString(), mode: direct ? 'direct-sdk' : 'observed-popup', landing: landing.status, landingReferrerPolicy: landing.referrerPolicy, publicToken: publicToken.status, foreignSession: foreignSession.status, localControl: localControl.status, protectedSession: session.status, protectedToken: token.status, tokenCache: token.headers.get('Cache-Control') };

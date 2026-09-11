@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 test('direct control preserves browser opening and verifies authorization before readback', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'apple-control-test-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  for (const [source, target] of [['control.mjs', 'control.mjs'], ['message-diagnostic.mjs', 'message-diagnostic.mjs'], ['../web-authorization.mjs', 'web-authorization.mjs']]) await copyFile(new URL(source, import.meta.url), join(directory, target));
+  for (const [source, target] of [['control.mjs', 'control.mjs'], ['credential-pairing.mjs', 'credential-pairing.mjs'], ['message-diagnostic.mjs', 'message-diagnostic.mjs'], ['../web-authorization.mjs', 'web-authorization.mjs']]) await copyFile(new URL(source, import.meta.url), join(directory, target));
   for (const outcome of ['authorized', 'incomplete', 'rejected']) await t.test(outcome, async () => {
     const previous = Object.fromEntries(['window', 'document', 'fetch'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
     const elements = Object.fromEntries(['#authorize', '#status', '#diagnostics'].map(id => [id, { disabled: true, textContent: '' }]));
@@ -21,7 +21,8 @@ test('direct control preserves browser opening and verifies authorization before
       navigator: { userActivation: { isActive: true } },
       name: 'private-window-name', isSecureContext: true, opener: null,
       history: { replaceState(_state, _title, path) { assert.equal(path, '/'); host.location.hash = ''; } },
-      addEventListener(event, listener) { listeners[event] = listener; },
+      addEventListener(event, listener) { (listeners[event] ??= []).push(listener); },
+      removeEventListener(event, listener) { listeners[event] = listeners[event].filter(value => value !== listener); },
     };
     host.parent = host;
     Object.defineProperty(host, 'open', { get() { openReads += 1; return () => { calls.push('sdk-popup'); return {}; }; }, set() { throw new Error('Control must not replace window.open'); } });
@@ -31,20 +32,21 @@ test('direct control preserves browser opening and verifies authorization before
       async authorize() {
         calls.push('authorize');
         host.open();
-        listeners.message({ origin: 'https://idmsa.apple.com', data: JSON.stringify({ jsonrpc: '2.0', method: 'authorize', params: ['private-user-token'] }) });
+        for (const listener of listeners.message) listener({ origin: 'https://idmsa.apple.com', data: JSON.stringify({ jsonrpc: '2.0', method: 'authorize', params: ['private-user-token'] }) });
         if (outcome === 'rejected') throw { reason: 'AUTHORIZATION_ERROR', message: 'private-user-token' };
         music.isAuthorized = outcome === 'authorized';
         return 'private-user-token';
       },
       api: { async music(path) { calls.push(path); return { data: { data: [{ id: 'us' }] } }; } },
     };
-    host.MusicKit = { async configure(config) { assert.equal(config.developerToken, 'private-developer-token'); assert.equal(host.location.hash, ''); }, getInstance() { return music; } };
+    host.MusicKit = { async configure(config) { assert.notEqual(host.fetch, globalThis.fetch); assert.equal(config.developerToken, 'private-developer-token'); assert.equal(host.location.hash, ''); }, getInstance() { return music; } };
     globalThis.window = host;
     globalThis.document = { querySelector: selector => elements[selector], addEventListener(event, listener) { listeners[event] = listener; }, createElement: () => ({}), head: { append(script) { assert.equal(script.src, 'https://js-cdn.music.apple.com/musickit/v3/musickit.js'); } } };
     globalThis.fetch = async path => {
       calls.push(path);
       return { ok: true, json: async () => ({ developerToken: 'private-developer-token', issuedAt: now, expiresAt: now + 900 }) };
     };
+    host.fetch = globalThis.fetch;
     try {
       await import(`${pathToFileURL(join(directory, 'control.mjs')).href}?outcome=${outcome}`);
       await listeners.musickitloaded();
