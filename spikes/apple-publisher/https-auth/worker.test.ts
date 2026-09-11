@@ -51,6 +51,18 @@ describe('isolated HTTPS Apple authorization probe', () => {
     expect((await SELF.fetch(`${origin}/developer-token`, { headers: { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document', Cookie: `__Host-apple-auth-probe=${invite}` } })).status).toBe(403);
   });
 
+  it('serves the direct MusicKit control through the same protected origin', async () => {
+    const page = await SELF.fetch(`${origin}/control`, { headers: { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document' } });
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain('Direct MusicKit control');
+    expect(page.headers.get('Content-Security-Policy')).toBe((await SELF.fetch(`${origin}/`)).headers.get('Content-Security-Policy'));
+    const script = await SELF.fetch(`${origin}/control.mjs`);
+    expect(script.status).toBe(200);
+    expect(await script.text()).not.toContain(env.DEVELOPER_TOKEN);
+    expect((await SELF.fetch(`${origin}/message-diagnostic.mjs`)).status).toBe(200);
+    expect((await SELF.fetch(`${origin}/control`, { method: 'POST' })).status).toBe(404);
+  });
+
   it('fails closed outside dev or after the developer token expires', async () => {
     const request = new Request(`${origin}/developer-token`, { headers: { ...headers, Cookie: `__Host-apple-auth-probe=${invite}` } });
     expect((await worker.fetch(request, { ...env, DEPLOYMENT_STAGE: 'prod' } as ProbeEnvironment)).status).toBe(503);
