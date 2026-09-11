@@ -79,8 +79,8 @@ function providerPlaylists() {
 
 describe("isolated Spotify staging security and HTTP", () => {
   it("requires operator authorization for controls and keeps status private", async () => {
-    for (const path of ["/control/invitations", "/control/confirm", "/control/desired", "/control/status"]) {
-      expect((await request(path, undefined, path.endsWith("status") ? "GET" : "POST", {})).status).toBe(401);
+    for (const path of ["/control/invitations", "/control/confirm", "/control/desired", "/control/status", "/control/readback?playlistKey=remote-spike"]) {
+      expect((await request(path, undefined, path.endsWith("status") || path.includes("readback") ? "GET" : "POST", {})).status).toBe(401);
     }
     const health = await http(origin + "/health");
     expect(health.status).toBe(200);
@@ -156,6 +156,10 @@ describe("isolated Spotify staging security and HTTP", () => {
     expect(next.status).toBe(200);
     expect(await next.json()).toMatchObject({ providerPlaylistId: P, appliedRevision: 2 });
     expect(spotify.tracks()).toEqual([C, A, D].map(id => `spotify:track:${id}`));
+    expect(spotify.creates()).toBe(1);
+    const readback = await request("/control/readback?playlistKey=remote-spike", undefined, "GET");
+    expect(readback.status).toBe(200);
+    expect(await readback.json()).toMatchObject({ providerPlaylistId: P, publisherId: "friend-owner", appliedRevision: 2, revision: 2, trackUris: [C, A, D].map(id => `spotify:track:${id}`), matchesDesired: true, snapshotId: "2" });
     expect(spotify.creates()).toBe(1);
   });
 

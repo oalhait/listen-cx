@@ -47,6 +47,37 @@ function fixture() {
 }
 
 describe("Spotify publisher contract", () => {
+  it("reads current provider contents without rewriting drift or trusting an applied revision", async () => {
+    const f = fixture();
+    await f.publisher.reconcile(desired());
+    f.tracks().splice(0, 3, `spotify:track:${D}`);
+    f.calls.length = 0;
+    const observed = await f.publisher.observe("acceptance");
+    expect(observed).toMatchObject({ providerPlaylistId: playlistId, publisherId: "publisher", appliedRevision: 1, revision: 1, trackUris: [`spotify:track:${D}`], matchesDesired: false, snapshotId: "1", observedAt: 1000 });
+    expect(f.calls.every(call => call.method === "GET")).toBe(true);
+    expect(f.rows.get("acceptance")?.appliedRevision).toBe(1);
+  });
+
+  it("refuses absent destinations and unstable provider snapshots as readback evidence", async () => {
+    const f = fixture();
+    await expect(f.publisher.observe("missing")).rejects.toMatchObject({ code: "destination_unavailable" });
+    await f.publisher.reconcile(desired());
+    let snapshot = 0;
+    f.faults.push(path => path === `/playlists/${playlistId}` ? Response.json({ owner: { id: "publisher" }, public: true, description: f.rows.get("acceptance")!.marker, snapshot_id: String(snapshot++) }) : undefined);
+    await expect(f.publisher.observe("acceptance")).rejects.toMatchObject({ code: "readback_unstable" });
+  });
+
+  it("preserves readback rate limits across restarts without touching playlist contents", async () => {
+    const f = fixture();
+    await f.publisher.reconcile(desired());
+    f.calls.length = 0;
+    f.faults.push(() => Response.json({}, { status: 429, headers: { "retry-after": "60" } }));
+    await expect(f.publisher.observe("acceptance")).rejects.toMatchObject({ status: 429 });
+    await expect(f.make().observe("acceptance")).rejects.toMatchObject({ code: "rate_limited", retryAfterSeconds: 60 });
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]!.method).toBe("GET");
+    expect(f.rows.get("acceptance")?.appliedRevision).toBe(1);
+  });
   it("creates one public spike playlist and verifies [A,B,C] then [C,A,D] at the same ID", async () => {
     const f = fixture();
     expect(await f.publisher.reconcile(desired())).toMatchObject({ providerPlaylistId: playlistId, appliedRevision: 1 });

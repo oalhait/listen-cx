@@ -132,7 +132,7 @@ The harness now returns the real provider status plus bounded, credential-redact
 
 ## Isolated HTTPS staging deployment
 
-Initially deployed September 9, 2026 at 22:04 PDT; updated at 22:34 PDT to reuse the registered staging callback and at 22:42 PDT to fix native browser form navigation. The service is [listen-cx-spotify-spike-staging](https://listen-cx-spotify-spike-staging.omar-alhait.workers.dev/health), version `5315311d-37b8-472c-a188-cbc59e4bd83e`. It has its own SQLite Durable Object. Only the isolated Worker was deployed; the website Worker, D1 database and existing `staging.listen.cx` custom-domain binding were preserved. Three narrow HTTPS routes (`/auth/invite*`, `/auth/start*`, `/auth/callback*`) on `staging.listen.cx` forward the OAuth flow to the spike. Production routes and the production callback were untouched. The local publisher state and harness remain intact.
+Initially deployed September 9, 2026 at 22:04 PDT; updated at 22:34 PDT to reuse the registered staging callback and at 22:42 PDT to fix native browser form navigation. The service is [listen-cx-spotify-spike-staging](https://listen-cx-spotify-spike-staging.omar-alhait.workers.dev/health), version `74b12625-b8f2-4880-8d92-4ce686ee8a3b` (September 10 readback update). It has its own SQLite Durable Object. Only the isolated Worker was deployed; the website Worker, D1 database and existing `staging.listen.cx` custom-domain binding were preserved. Three narrow HTTPS routes (`/auth/invite*`, `/auth/start*`, `/auth/callback*`) on `staging.listen.cx` forward the OAuth flow to the spike. Production routes and the production callback were untouched. The local publisher state and harness remain intact.
 
 **Existing registered dashboard callback now served by the spike:**
 
@@ -163,6 +163,7 @@ The staging-only operator token and AES-GCM encryption key were generated privat
 | `POST /auth/start` | Canonical Origin and matching cookie/form nonce; atomically consumes ticket and begins PKCE |
 | `GET /auth/callback` | One-use OAuth state plus Secure HttpOnly host cookie; exchanges code, verifies `/me`, saves encrypted candidate |
 | `GET /control/status` | Operator bearer; safe candidate/destination/failure metadata only |
+| `GET /control/readback?playlistKey=…` | Operator bearer; fresh provider contents between matching snapshot IDs, without changing the playlist |
 | `POST /control/confirm` | Operator bearer; `{candidateId,publisherId,appMode}` explicitly binds the pending publisher |
 | `PUT /control/desired` | Operator bearer; same desired-state contract as the local harness |
 | `POST /control/recover-create` | Operator bearer; same guarded ambiguous-create recovery as local |
@@ -218,3 +219,41 @@ The first remote friend click in Arc failed before reaching Spotify. Chrome 152 
 Both header regressions failed before their fixes; all fifteen staging tests and the staging typecheck then passed. The tests retain explicit rejection of null and attacker origins, missing browser cookies, and replayed invitations. Actual Chrome navigation against the fixed local Worker produced the expected Origin, a 302 POST response, and a top-level GET to Spotify without a Referer. The browser intercepted the Spotify boundary, so this check made no provider requests or changes. The post-deployment smoke passed eleven read-only/protected-negative checks at `2026-09-10T05:42:21Z`. No replacement invitation was issued and the friend's pending state was preserved. A failed origin check does not consume an invitation; the friend must reopen the original link to load the corrected headers, within its original expiry.
 
 Manual HTTP tests that supply Origin cannot establish native-browser form behavior. Future changes to OAuth page headers should repeat a real browser form submission through the redirect, using isolated fixture state and intercepting the provider boundary.
+
+### Two-phase live acceptance runner
+
+`spikes/spotify-publisher/live-test.ts` captures fresh provider readback after each phase. The initial phase publishes `[A,B,C]` at revision 1. Stop there for the separate listener to save the public playlist in Spotify. The updated phase publishes `[C,A,D]` at revision 2 only when the stored destination still matches the initial receipt's playlist ID. Each receipt records observed track URIs, owner ID, snapshot ID and observation time. API verification always leaves `listenerVerification: pending`; a successful API receipt does not prove native-library propagation.
+
+Create a private manifest after the candidate's identity and dashboard mode have been observed and explicitly confirmed through `/control/confirm`. Use the exact confirmed `publisherId` and `appMode`, a new stable `playlistKey`, and four distinct Spotify IDs in `trackIds`. Keep that manifest unchanged between phases. These public oEmbed titles were verified at `2026-09-11T05:44:23Z`; they establish catalog metadata, not publisher access or listener-market availability:
+
+| Label | Track | Spotify ID |
+| --- | --- | --- |
+| A | Cataracts | `4SN5Kkig8iJ8vdwsOoP7IO` |
+| B | Never Gonna Give You Up | `4uLU6hMCjMI75M1A2tKUQC` |
+| C | Mr. Brightside | `3n3Ppam7vgaVa1iaRUc9Lp` |
+| D | Blinding Lights | `0VjIjW4GlUZAMYd2vXMi3b` |
+
+With a manifest saved in the existing private staging state directory:
+
+```sh
+node spikes/spotify-publisher/live-test.ts \
+  --manifest ~/.local/state/songlink/spotify-publisher-staging/live-manifest.json \
+  --phase initial --publish \
+  --output ~/.local/state/songlink/spotify-publisher-staging/initial-readback.json
+```
+
+Before phase 2, record the listener's confirmation that their account is outside the app's OAuth allowlist, the Spotify client/platform, the saved playlist URL/ID, the visible `[A,B,C]` order, and the observation time. The listener does not authorize this app. Then run:
+
+```sh
+node spikes/spotify-publisher/live-test.ts \
+  --manifest ~/.local/state/songlink/spotify-publisher-staging/live-manifest.json \
+  --phase updated --publish \
+  --initial ~/.local/state/songlink/spotify-publisher-staging/initial-readback.json \
+  --output ~/.local/state/songlink/spotify-publisher-staging/updated-readback.json
+```
+
+Record when that same saved playlist displays `[C,A,D]`, whether reopening or refreshing was needed, and whether its native library save persisted. Capture a screenshot or direct listener observation without recording account credentials. Until both listener observations exist, outside-allowlist save and propagation remain unverified.
+
+Omitting `--publish` performs only protected status and fresh provider reads. Output files are private and created exclusively; reuse the same manifest/phase with a new evidence filename when retrying. The runner never issues or confirms invitations, automatically retries errors, advances phases on its own, or creates a replacement key. A 429 reports its retry delay; wait before rerunning. An unknown control-write outcome requires status inspection followed by the same revision, not a new key. A persisted `create_unresolved` blocks further creation: inspect the publisher's native library, then use the existing explicit recovery endpoint only for an observed playlist ID whose owner and spike marker pass verification. Do not clear destination state to bypass uncertainty.
+
+The readback endpoint independently fetches metadata, contents, and metadata again, accepting only an unchanged snapshot. It can report drift even when the stored revision is marked applied, without repairing that drift. Rate-limit deadlines survive restart. All 48 Node/core/harness/runner fixture tests and 15 Worker fixture tests passed; both spike typechecks and the staging dry run passed. After deployment, twelve read-only/protected-negative HTTPS checks passed at `2026-09-11T05:45:05Z`; an authorized read of an absent destination returned `destination_unavailable` without a provider request. No real playlist write or authenticated playlist readback has yet occurred.

@@ -12,6 +12,17 @@ export type DestinationStore = {
   get(key: string): Promise<Destination | undefined>;
   set(key: string, value: Destination): Promise<void>;
 };
+export type Observation = {
+  playlistKey: string;
+  providerPlaylistId: string;
+  publisherId: string;
+  revision: number;
+  appliedRevision: number | null;
+  trackUris: string[];
+  snapshotId: string;
+  observedAt: number;
+  matchesDesired: boolean;
+};
 
 export class PublishingError extends Error {
   code: string;
@@ -134,6 +145,38 @@ export class SpotifyPublisher {
     } finally {
       this.busy.delete(desired.playlistKey);
     }
+  }
+
+  async observe(playlistKey: string): Promise<Observation> {
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(playlistKey)) throw new PublishingError("invalid_playlist_key", 400);
+    if (this.busy.has(playlistKey)) throw new PublishingError("busy");
+    this.busy.add(playlistKey);
+    try {
+      const row = await this.options.store.get(playlistKey);
+      if (!row?.providerPlaylistId || !row.publisherId || row.createUnresolved) throw new PublishingError("destination_unavailable");
+      if (row.retryNotBefore > this.now()) throw new PublishingError("rate_limited", 429, Math.ceil((row.retryNotBefore - this.now()) / 1000));
+      try {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (attempt) await this.sleep(attempt * 500);
+          const before = await this.metadata(row);
+          const trackUris = await this.readItems(row);
+          const after = await this.metadata(row);
+          if (before.snapshot_id === after.snapshot_id) return {
+            playlistKey, providerPlaylistId: row.providerPlaylistId, publisherId: row.publisherId,
+            revision: row.desired.revision, appliedRevision: row.appliedRevision, trackUris,
+            snapshotId: after.snapshot_id, observedAt: this.now(),
+            matchesDesired: equal(trackUris, row.desired.trackIds.map(id => `spotify:track:${id}`)),
+          };
+        }
+        throw new PublishingError("readback_unstable", 502);
+      } catch (error) {
+        if (error instanceof PublishingError && error.status === 429) {
+          row.retryNotBefore = this.now() + (error.retryAfterSeconds ?? 60) * 1000;
+          await this.save(row);
+        }
+        throw error;
+      }
+    } finally { this.busy.delete(playlistKey); }
   }
 
   async recoverCreate(playlistKey: string, providerPlaylistId: string): Promise<Destination> {
