@@ -2,6 +2,7 @@ const reasons = new Set(['AUTHORIZATION_ERROR', 'AUTHORIZATION_INCOMPLETE', 'ACC
 const callbackMethods = new Set(['authorize', 'decline', 'unavailable', 'switchUserId', 'close', 'thirdPartyInfo']);
 
 export function authorizationError(error) {
+  if (error === 'Storefront Country Code error.') return { reason: 'STOREFRONT_READBACK_FAILED', httpStatus: null };
   const reason = [error?.reason, error?.errorCode, error?.message].find(value => reasons.has(value)) ?? 'UNKNOWN_ERROR';
   const status = error?.data?.status ?? error?.status;
   return { reason, httpStatus: Number.isInteger(status) && status >= 100 && status <= 599 ? status : null };

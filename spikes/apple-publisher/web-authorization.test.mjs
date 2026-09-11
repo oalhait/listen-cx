@@ -8,6 +8,12 @@ test('reports only allowlisted error fields and never copies credentials or arbi
   assert.equal(JSON.stringify(authorizationError({ reason: secret, code: secret, message: secret })).includes(secret), false);
 });
 
+test('identifies the SDK storefront rejection without inventing an HTTP status or exposing other strings', () => {
+  assert.deepEqual(authorizationError('Storefront Country Code error.'), { reason: 'STOREFRONT_READBACK_FAILED', httpStatus: null });
+  assert.deepEqual(authorizationError('Storefront Country Code error. private-token-value'), { reason: 'UNKNOWN_ERROR', httpStatus: null });
+  assert.deepEqual(authorizationError('private-token-value'), { reason: 'UNKNOWN_ERROR', httpStatus: null });
+});
+
 test('observes Apple callback methods without reading authorization parameters', () => {
   const data = { jsonrpc: '2.0', method: 'authorize', get params() { throw new Error('Must not read tokens'); } };
   assert.deepEqual(appleCallback({ origin: 'https://authorize.music.apple.com', data }), { method: 'authorize' });
