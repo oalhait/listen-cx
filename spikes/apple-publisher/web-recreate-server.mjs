@@ -5,13 +5,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { createDeveloperToken } from './token-helper.mjs';
 import { reserveRevision, recordCreation } from './web-recreate.mjs';
+import { authorizationDiagnostic } from './web-authorization.mjs';
 
 const directory = dirname(fileURLToPath(import.meta.url));
-const assets = { '/': ['web-recreate.html', 'text/html'], '/web-recreate-browser.mjs': ['web-recreate-browser.mjs', 'text/javascript'], '/web-recreate.mjs': ['web-recreate.mjs', 'text/javascript'] };
+const assets = { '/': ['web-recreate.html', 'text/html'], '/web-recreate-browser.mjs': ['web-recreate-browser.mjs', 'text/javascript'], '/web-recreate.mjs': ['web-recreate.mjs', 'text/javascript'], '/web-authorization.mjs': ['web-authorization.mjs', 'text/javascript'] };
 
 export function createWebServer({ journalFile, developerToken, fixtures }) {
   mkdirSync(dirname(journalFile), { recursive: true, mode: 0o700 });
   let state = existsSync(journalFile) ? JSON.parse(readFileSync(journalFile, 'utf8')) : { runID: randomUUID().slice(0, 8), revisions: [] };
+  const authorizationDiagnostics = [];
   const save = next => {
     writeFileSync(`${journalFile}.tmp`, JSON.stringify(next, null, 2), { mode: 0o600 });
     renameSync(`${journalFile}.tmp`, journalFile);
@@ -36,6 +38,7 @@ export function createWebServer({ journalFile, developerToken, fixtures }) {
           res.setHeader('Content-Type', type);
           res.end(readFileSync(resolve(directory, file)));
         } else if (req.url === '/state') res.end(JSON.stringify({ ...state, fixtures }));
+        else if (req.url === '/authorization-diagnostics') res.end(JSON.stringify(authorizationDiagnostics));
         else if (req.url === '/developer-token' && req.headers['sec-fetch-site'] === 'same-origin') res.end(JSON.stringify({ developerToken: developerToken() }));
         else res.writeHead(404).end('{}');
         return;
@@ -50,6 +53,12 @@ export function createWebServer({ journalFile, developerToken, fixtures }) {
         if (body.length > 16000) throw new Error('Body too large');
       }
       const input = JSON.parse(body);
+      if (req.url === '/authorization-diagnostics') {
+        authorizationDiagnostics.push({ at: new Date().toISOString(), ...authorizationDiagnostic(input) });
+        if (authorizationDiagnostics.length > 40) authorizationDiagnostics.shift();
+        res.end('{}');
+        return;
+      }
       if (req.url === '/reserve') save(reserveRevision(state, input.revision));
       else if (req.url === '/created') save(recordCreation(state, input.revision, input.id));
       else if (req.url === '/readback') {

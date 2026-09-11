@@ -55,3 +55,14 @@ test('requires same-origin browser access for the token and refuses foreign muta
   assert.equal((await fetch(`${origin}/reserve`, { method: 'POST', body: '{"revision":1}' })).status, 403);
   assert.equal((await fetch(`${origin}/.local/web-recreate-journal.json`)).status, 404);
 });
+
+test('retains safe popup failure diagnostics without credentials or a recreation reservation', async t => {
+  const { origin, post } = await setup(t);
+  assert.equal((await post('/authorization-diagnostics', { type: 'popup-blocked', isAuthorized: false, remainingSeconds: 890, params: { token: 'secret-value' } })).status, 200);
+  assert.equal((await post('/authorization-diagnostics', { type: 'operation-error', reason: 'POPUP_BLOCKED', message: 'secret-value' })).status, 200);
+  const events = await (await fetch(`${origin}/authorization-diagnostics`)).json();
+  assert.equal(events[0].type, 'popup-blocked');
+  assert.equal(events[1].reason, 'POPUP_BLOCKED');
+  assert.equal(JSON.stringify(events).includes('secret-value'), false);
+  assert.deepEqual((await (await fetch(`${origin}/state`)).json()).revisions, []);
+});
