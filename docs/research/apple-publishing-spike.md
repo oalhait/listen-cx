@@ -32,11 +32,11 @@ The harness records a reservation before each provider POST, persists returned I
 doppler run --project listen-cx --config dev_personal -- node spikes/apple-publisher/web-recreate-server.mjs
 ```
 
-Open `http://127.0.0.1:8794` in a normal browser, choose **Authorize Apple Music**, and complete Apple's own sign-in and consent. The two creation buttons remain separate from authorization. **Current live status:** MusicKit v3 initialized successfully; normal Chrome opened Apple's sign-in popup and reached the two-factor verification prompt. That attempt returned without authorization; the page is ready to reopen sign-in when Omar completes it. Subscriber consent remains required. No provider playlist has been created, and ordered/public readback has not run. The Codex in-app browser initialized MusicKit but did not expose its authorization popup; normal Chrome did.
+Open `http://127.0.0.1:8794` in a normal browser, choose **Authorize Apple Music**, and complete Apple's own sign-in and consent. The two creation buttons remain separate from authorization. **Local harness status:** MusicKit v3 initialized successfully and normal Chrome opened Apple's sign-in popup, but local authorization did not complete. The separate HTTPS direct control subsequently completed authorization and storefront readback, as recorded below; that does not transfer authorization to this local harness. No provider playlist has been created by the web experiment, and ordered/public readback has not run. The Codex in-app browser initialized MusicKit but did not expose its authorization popup; normal Chrome did.
 
 The local server mints 15-minute developer JWTs from the existing Doppler environment and restricts its token route to same-origin browser requests. Private keys stay in the local server; Music User Tokens stay with MusicKit and are not copied into the journal or logs. Same-machine processes are trusted in this local spike. The ignored `.local/web-recreate-journal.json` stores reservations, IDs, and readback evidence. Preserve that file: removing it would remove the two-creation fence.
 
-Validation: nine focused Node tests pass, covering creation request shape, the two-revision limit, duplicate/uncertain IDs, persistence across restart and competing tabs, returned order/unresolved IDs, truncated readback, token isolation, and same-origin restrictions. These fixture tests prove harness behavior only; live Apple acceptance remains pending browser consent. No product export flow, Threads publication adapter, native runtime change, deployment, or vendor outreach is included.
+Validation: nine focused Node tests pass, covering creation request shape, the two-revision limit, duplicate/uncertain IDs, persistence across restart and competing tabs, returned order/unresolved IDs, truncated readback, token isolation, and same-origin restrictions. These fixture tests prove harness behavior only; live playlist creation and ordered/public readback remain pending. No product export flow, Threads publication adapter, native runtime change, deployment, or vendor outreach is included.
 
 ### Authorization failure diagnosis, September 11
 
@@ -100,9 +100,23 @@ The corrected live attempt on September 11 at 19:41:08.412 UTC restored `thirdPa
 
 Both required request headers were present. The request's developer-token key, team, issuance time, and expiry matched the prepared session. At 19:45:01.959 UTC, that session's developer token returned HTTP **200** with catalog data using the same probe Origin. The SDK passes the callback token directly into its user-token header. These checks do not identify why Apple rejects the user authorization; an account/grant problem and a user-token/developer binding problem remain unresolved. A controlled second-subscriber comparison with the same app/key would help distinguish account-specific failure from a shared failure. No further consent, key rotation, or provider write was attempted during this inspection.
 
-The direct control now includes a passive credential-pairing observer installed before loading MusicKit. During one authorization attempt it compares the first internal storefront request's developer token with the configured token and its user token with the fresh Apple callback. Comparisons use transient in-memory SHA-256 digests; diagnostics contain only match booleans, callback presence, HTTP status, and the fixed Apple error code `40300` when present in a bounded response copy. It forwards fetch arguments and the returned promise unchanged, does not alter popup handling, and sends no extra provider requests. This checks transport pairing; it does not establish that Apple issued a valid user grant or prove the popup received the configured developer token at runtime. Live comparison remains pending.
+The direct control now includes a passive credential-pairing observer installed before loading MusicKit. During one authorization attempt it compares the first internal storefront request's developer token with the configured token and its user token with the fresh Apple callback. Comparisons use transient in-memory SHA-256 digests; diagnostics contain only match booleans, callback presence, HTTP status, and the fixed Apple error code `40300` when present in a bounded response copy. It forwards fetch arguments and the returned promise unchanged, does not alter popup handling, and sends no extra provider requests. This checks transport pairing; it does not establish that Apple issued a valid user grant or prove the popup received the configured developer token at runtime. The successful live comparison is recorded below.
 
-The diagnostic normalizer now recognizes the SDK's exact plain-string storefront rejection as `STOREFRONT_READBACK_FAILED`, preserving a null HTTP status because the SDK discards it. A regression test verifies both that classification and continued redaction of arbitrary strings. This diagnostic change is committed locally; the live response code above came from the preserved browser Network entry.
+The diagnostic normalizer now recognizes the SDK's exact plain-string storefront rejection as `STOREFRONT_READBACK_FAILED`, preserving a null HTTP status because the SDK discards it. A regression test verifies both that classification and continued redaction of arbitrary strings. The normalizer is deployed in the isolated dev probe; the earlier live 403 response code above came from the preserved browser Network entry.
+
+### Successful web authorization and storefront readback
+
+On September 11 at **23:34:50 UTC**, Omar's supplied safe diagnostics from the isolated HTTPS direct control confirmed completed authorization on deployment `6d354fca-fae4-4d19-9b72-108fa00eafb7`:
+
+| Evidence | UTC time | Result |
+| --- | --- | --- |
+| Fresh Apple authorization callback | 23:34:50.114 | Callback received; SDK status `3` followed |
+| Credential pairing | 23:34:50.116 | Fresh callback observed; outgoing developer token matched configuration; outgoing user token matched the callback |
+| SDK's internal storefront request | 23:34:50.382 | HTTP **200** |
+| `authorize()` completed | 23:34:50.383 | Authorization succeeded; final `isAuthorized` was `true` |
+| Explicit storefront readback | 23:34:50.609 | Succeeded with storefront **`us`** |
+
+The referrer-policy correction is proven to restore Apple callback delivery. The subsequent `40300` rejection also cleared, but its exact cause remains unknown: the successful attempt used an unchanged instrumented probe with a refreshed short-lived session. The passive observer verifies credential pairing; it is not an authorization fix. This result proves web authorization and personalized read access for this session. Playlist creation, exact ordered readback, public sharing, and any Threads publishing integration remain unverified. No provider write was performed during this authorization test.
 
 ### Verified Apple identifier mapping
 
