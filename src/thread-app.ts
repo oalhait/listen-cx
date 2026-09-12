@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { readBoundedJson, isRecord } from "./request.js";
 import type { Resolver } from "./resolve.js";
 import type { D1ThreadStore } from "./thread-db.js";
-import { parseTrackUrl } from "./urls.js";
+import { parseTrackUrl, type Provider } from "./urls.js";
 import { ThreadError, mutationFingerprint, verifiedSource, type ManagementIntent, type MutationRequest } from "./thread.js";
 import { authorizeManagementCapability, isSameOriginAction, managementCookie, setManagementCookie, THREAD_SECURITY_HEADERS } from "./thread-security.js";
 import { threadCreationPage, threadPage } from "./thread-page.js";
@@ -23,7 +23,12 @@ function requestFields(body: Record<string, unknown>): MutationRequest {
   return { requestKey: body.requestKey, expectedRevision: body.expectedRevision };
 }
 
-export function createThreadApp({ resolver, store, baseUrl }: { resolver: Pick<Resolver, "resolve">; store: D1ThreadStore; baseUrl: string }) {
+export interface ThreadPublishing {
+  availableProviders: Provider[];
+  onChange: (capability: string) => void;
+}
+
+export function createThreadApp({ resolver, store, baseUrl, publishing }: { resolver: Pick<Resolver, "resolve">; store: D1ThreadStore; baseUrl: string; publishing?: ThreadPublishing }) {
   const app = new Hono();
   for (const path of ["/threads/new", "/t/*", "/api/threads", "/api/threads/*"]) {
     app.use(path, async (c, next) => {
@@ -62,7 +67,7 @@ export function createThreadApp({ resolver, store, baseUrl }: { resolver: Pick<R
     const capability = c.req.param("capability");
     const thread = await store.get(capability);
     if (!thread) return c.html(threadPage(null, false), 404);
-    return c.html(threadPage(thread, Boolean(await authorization(c, capability))));
+    return c.html(threadPage(thread, Boolean(await authorization(c, capability)), publishing?.availableProviders));
   });
   app.post("/api/threads/:capability/contributions", async c => {
     const capability = c.req.param("capability");
@@ -72,13 +77,17 @@ export function createThreadApp({ resolver, store, baseUrl }: { resolver: Pick<R
     if (!parsed || typeof body.url !== "string") throw new ThreadError(400, "invalid_track", "Send a direct Spotify or Apple Music track link.");
     const fingerprint = await mutationFingerprint({ kind: "add", source: parsed });
     const replay = await store.preflight(capability, request.requestKey, fingerprint, request.expectedRevision);
-    if (replay) return c.json({ receipt: replay, thread: await view(capability) });
+    if (replay) {
+      publishing?.onChange(capability);
+      return c.json({ receipt: replay, thread: await view(capability) });
+    }
     let track;
     try { track = await resolver.resolve(body.url); }
     catch { throw new ThreadError(502, "provider_unavailable", "The music app is unavailable. Try again."); }
     if (!track) throw new ThreadError(404, "track_not_found", "Track not found. Try another track link.");
     const source = verifiedSource(body.url, track);
     const receipt = await store.add(capability, { ...request, source, track });
+    publishing?.onChange(capability);
     return c.json({ receipt, thread: await view(capability) });
   });
   app.post("/t/:capability/manage/activate", async c => {
@@ -95,14 +104,25 @@ export function createThreadApp({ resolver, store, baseUrl }: { resolver: Pick<R
     const capability = c.req.param("capability");
     const authorized = await authorization(c, capability);
     if (!authorized) throw new ThreadError(403, "forbidden", "Open the private management link to edit this Thread.");
-    const body = await bodyFields(c, ["kind", "id", "ids", "requestKey", "expectedRevision"]);
+    const body = await bodyFields(c, ["kind", "id", "ids", "provider", "requestKey", "expectedRevision"]);
     const request = requestFields(body);
     let intent: ManagementIntent;
-    if (body.kind === "close" && body.id === undefined && body.ids === undefined) intent = { kind: "close" };
+    if (body.kind === "connect" && (body.provider === "spotify" || body.provider === "apple") && body.id === undefined && body.ids === undefined) {
+      intent = { kind: "connect", provider: body.provider };
+      const replay = await store.preflight(capability, request.requestKey, await mutationFingerprint(intent), request.expectedRevision);
+      if (replay) {
+        publishing?.onChange(capability);
+        return c.json({ receipt: replay, thread: await view(capability) });
+      }
+      if (!publishing?.availableProviders.includes(body.provider)) throw new ThreadError(503, "publisher_unavailable", "This music app is not available for publishing yet.");
+    }
+    else if (body.provider !== undefined) throw new ThreadError(400, "invalid_action", "Choose a supported Thread action.");
+    else if (body.kind === "close" && body.id === undefined && body.ids === undefined) intent = { kind: "close" };
     else if (body.kind === "remove" && Number.isSafeInteger(body.id) && Number(body.id) > 0 && body.ids === undefined) intent = { kind: "remove", id: Number(body.id) };
     else if (body.kind === "reorder" && Array.isArray(body.ids) && body.ids.length <= 50 && body.ids.every(id => Number.isSafeInteger(id) && id > 0) && body.id === undefined) intent = { kind: "reorder", ids: body.ids };
     else throw new ThreadError(400, "invalid_action", "Choose remove, reorder, or close with valid song IDs.");
     const receipt = await store.manage(authorized, { ...request, ...intent });
+    publishing?.onChange(capability);
     return c.json({ receipt, thread: await view(capability) });
   });
   return app;

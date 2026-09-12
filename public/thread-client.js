@@ -47,6 +47,29 @@ export function createThreadController({ fetcher = fetch, update, storage }) {
   };
 }
 
+export function createConnectionController({ connect, showAppleConfirmation }) {
+  let appleRequested = false;
+  return {
+    request(provider) {
+      if (provider === 'spotify') connect(provider);
+      if (provider === 'apple') {
+        appleRequested = true;
+        showAppleConfirmation(true);
+      }
+    },
+    confirmApple() {
+      if (!appleRequested) return;
+      appleRequested = false;
+      showAppleConfirmation(false);
+      connect('apple');
+    },
+    cancelApple() {
+      appleRequested = false;
+      showAppleConfirmation(false);
+    },
+  };
+}
+
 export function watchManagementLink({ readHash, clearHash, onHashChange, activate }) {
   const changed = () => {
     const secret = new URLSearchParams(readHash().slice(1)).get('manage');

@@ -126,3 +126,23 @@ describe("Thread HTTP contract", () => {
     expect((await threadStore.get(cap))!.publications.every(publication => publication.status === "blocked")).toBe(true);
   });
 });
+
+it("connects available providers only with management access and honors Apple edit limits over HTTP", async () => {
+  const changed = vi.fn();
+  const enabled = createApp({ resolver: { resolve }, store: new D1LinkStore(env.DB), threadStore, baseUrl,
+    publishing: { availableProviders: ["spotify", "apple"], onChange: changed } });
+  const { cap, cookie } = await create();
+  await add(cap, 0);
+  const request = (body: unknown, auth?: string) => enabled.request(`${baseUrl}/t/${cap}/manage/mutate`, {
+    method: "POST", headers: { Origin: baseUrl, "Content-Type": "application/json", "X-Listen-Action": "thread", ...(auth ? { Cookie: auth } : {}) }, body: JSON.stringify(body),
+  });
+  const connect = { kind: "connect", provider: "apple", expectedRevision: 1, requestKey: "connect" };
+  expect((await request(connect)).status).toBe(403);
+  expect((await request(connect, cookie)).status).toBe(200);
+  expect(changed).toHaveBeenCalledWith(cap);
+  expect((await request(connect, cookie)).status).toBe(200);
+  const current = (await threadStore.get(cap))!;
+  expect((await request({ kind: "remove", id: current.contributions[0]!.id, expectedRevision: 2, requestKey: "remove" }, cookie)).status).toBe(409);
+  expect((await post(`/t/${cap}/manage/mutate`, { kind: "connect", provider: "spotify", expectedRevision: 2, requestKey: "spotify" }, cookie)).status).toBe(503);
+  expect((await threadStore.get(cap))!.revision).toBe(2);
+});

@@ -1,4 +1,4 @@
-import { createThreadController, threadRequest, watchManagementLink, copyThreadLink } from './thread-client.js';
+import { createThreadController, createConnectionController, threadRequest, watchManagementLink, copyThreadLink } from './thread-client.js';
 
 const message = document.querySelector('#thread-message');
 const thread = document.querySelector('#thread');
@@ -75,6 +75,21 @@ document.querySelector('#add-song-form')?.addEventListener('submit', event => {
 function manage(intent) {
   void controller.submit(`/t/${thread.dataset.capability}/manage/mutate`, { ...intent, expectedRevision: Number(thread.dataset.revision) });
 }
+
+const connections = createConnectionController({
+  connect: provider => manage({ kind: 'connect', provider }),
+  showAppleConfirmation(show) {
+    document.querySelector('#apple-connect-confirmation').hidden = !show;
+    const button = document.querySelector('[data-connect="apple"]');
+    button.hidden = show;
+    (show ? document.querySelector('#confirm-connect-apple') : button).focus();
+  },
+});
+document.querySelectorAll('[data-connect]').forEach(button => {
+  button.addEventListener('click', () => connections.request(button.dataset.connect));
+});
+document.querySelector('#confirm-connect-apple')?.addEventListener('click', () => connections.confirmApple());
+document.querySelector('#cancel-connect-apple')?.addEventListener('click', () => connections.cancelApple());
 
 document.querySelectorAll('[data-remove]').forEach(button => {
   button.addEventListener('click', () => manage({ kind: 'remove', id: Number(button.dataset.remove) }));

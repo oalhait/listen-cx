@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { createThreadController, newCapability, watchManagementLink, copyThreadLink } from './thread-client.js';
+import { createThreadController, createConnectionController, newCapability, watchManagementLink, copyThreadLink } from './thread-client.js';
 
 function storage() {
   let value = null;
@@ -66,4 +66,41 @@ it('selects the actual URL when automatic clipboard copy is unavailable', async 
   expect(copied).toBe(false);
   expect(link.textContent).toBe(link.href);
   expect(select).toHaveBeenCalledWith(link);
+});
+
+it('connects Apple only after explicit confirmation and allows cancellation', () => {
+  const connect = vi.fn();
+  const showAppleConfirmation = vi.fn();
+  const controller = createConnectionController({ connect, showAppleConfirmation });
+  controller.confirmApple();
+  expect(connect).not.toHaveBeenCalled();
+  controller.request('apple');
+  expect(showAppleConfirmation).toHaveBeenLastCalledWith(true);
+  expect(connect).not.toHaveBeenCalled();
+  controller.cancelApple();
+  controller.confirmApple();
+  expect(showAppleConfirmation).toHaveBeenLastCalledWith(false);
+  expect(connect).not.toHaveBeenCalled();
+  controller.request('apple');
+  controller.confirmApple();
+  controller.confirmApple();
+  expect(connect).toHaveBeenCalledExactlyOnceWith('apple');
+});
+
+it('connects Spotify directly and ignores unknown providers', () => {
+  const connect = vi.fn();
+  const controller = createConnectionController({ connect, showAppleConfirmation: vi.fn() });
+  controller.request('spotify');
+  controller.request('unknown');
+  expect(connect).toHaveBeenCalledExactlyOnceWith('spotify');
+});
+
+it('retries a connection with its persisted request key and current revision', async () => {
+  const saved = storage();
+  const fetcher = vi.fn().mockRejectedValueOnce(new Error('network')).mockResolvedValueOnce(Response.json({}));
+  const body = { kind: 'connect', provider: 'apple', expectedRevision: 2 };
+  await createThreadController({ fetcher, update: vi.fn(), storage: saved }).submit('/t/example/manage/mutate', body);
+  await createThreadController({ fetcher, update: vi.fn(), storage: saved }).submit('/t/example/manage/mutate', { ...body, expectedRevision: 3 });
+  const first = JSON.parse(fetcher.mock.calls[0][1].body);
+  expect(JSON.parse(fetcher.mock.calls[1][1].body)).toEqual({ ...body, expectedRevision: 3, requestKey: first.requestKey });
 });

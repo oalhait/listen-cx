@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { readBoundedJson, isRecord } from "./request.js";
-import { createThreadApp } from "./thread-app.js";
+import { createThreadApp, type ThreadPublishing } from "./thread-app.js";
 import type { D1ThreadStore } from "./thread-db.js";
 import type { Resolver } from "./resolve.js";
 import type { LinkStore } from "./db.js";
@@ -11,7 +11,7 @@ import { handleMcpRequest } from "./mcp.js";
 import type { AppleMusicDeveloperToken } from "./apple-music-auth.js";
 import { getJam, JamActionError } from "./jams.js";
 
-export function createApp({ resolver, store, jamStore, jamsEnabled = false, baseUrl, appleMusic, threadStore }: {
+export function createApp({ resolver, store, jamStore, jamsEnabled = false, baseUrl, appleMusic, threadStore, publishing }: {
   resolver: Pick<Resolver, "resolve">;
   store: LinkStore;
   jamStore?: JamStore;
@@ -22,6 +22,7 @@ export function createApp({ resolver, store, jamStore, jamsEnabled = false, base
     issueDeveloperToken(): Promise<AppleMusicDeveloperToken>;
   };
   threadStore?: D1ThreadStore;
+  publishing?: ThreadPublishing;
 }) {
   const app = new Hono();
 
@@ -106,7 +107,7 @@ export function createApp({ resolver, store, jamStore, jamsEnabled = false, base
     }
   });
 
-  if (threadStore) app.route("/", createThreadApp({ resolver, store: threadStore, baseUrl }));
+  if (threadStore) app.route("/", createThreadApp({ resolver, store: threadStore, baseUrl, publishing }));
 
   app.get("/:slug", async (c) => {
     c.header("Vary", "Accept");

@@ -22,9 +22,9 @@ it("shows management controls only to managers and locks closed Threads", () => 
   expect(closed).not.toContain('data-remove="1"');
   expect(closed).toContain("This Thread is closed");
 });
-it("describes blocked publishing without claiming sync or requiring native setup", () => {
+it("describes unconnected publishing without claiming sync or requiring native setup", () => {
   const page = threadPage(view, true);
-  expect(page).toContain("Sync unavailable");
+  expect(page).toContain("Not connected");
   expect(page).not.toContain("Install");
   expect(page).not.toContain("native_publisher");
   expect(page).not.toContain("physical device");
@@ -32,4 +32,60 @@ it("describes blocked publishing without claiming sync or requiring native setup
 it("offers a bounded creation form with private management-link guidance", () => {
   expect(threadCreationPage()).toContain('maxlength="80"');
   expect(threadCreationPage()).toContain("management link");
+  expect(threadCreationPage()).not.toContain("Sync to Apple Music and Spotify is not available yet");
+});
+
+it("offers available connections only to managers of open Threads", () => {
+  expect(threadPage(view, true, ["apple"])).toContain('data-connect="apple"');
+  expect(threadPage(view, true)).not.toContain('data-connect=');
+  expect(threadPage(view, false, ["apple"])).not.toContain('data-connect=');
+  expect(threadPage({ ...view, closedAt: "now" }, true, ["apple"])).not.toContain('data-connect=');
+  const connected = { ...view, publications: view.publications.map(p => ({ ...p, connected: true })) };
+  expect(threadPage(connected, true, ["apple"])).not.toContain('data-connect=');
+  const page = threadPage(view, true, ["apple"]);
+  expect(page).toContain('id="apple-connect-confirmation" hidden');
+  expect(page).toContain("permanently disables removing and reordering songs");
+  expect(page).toContain("cannot disconnect Apple Music");
+});
+
+it("hides removal and ordering after Apple connects while preserving additions and close", () => {
+  const page = threadPage({ ...view, publications: view.publications.map(p => ({ ...p, connected: true })) }, true);
+  expect(page).not.toContain('data-remove=');
+  expect(page).not.toContain('data-move=');
+  expect(page).toContain('id="add-song-form"');
+  expect(page).toContain('id="close-thread"');
+  expect(page).toContain("Apple Music is connected, so songs cannot be removed or reordered");
+});
+
+it("distinguishes pending, failed, unresolved, and verified sync without exposing internal errors", () => {
+  const publication = { ...view.publications[0]!, connected: true };
+  const page = (patch: Partial<typeof publication>) => threadPage({ ...view, publications: [{ ...publication, ...patch }] }, false);
+  expect(page({ status: "pending" })).toContain("Waiting to sync");
+  expect(page({ status: "failed", failureCode: "provider_secret_failure" })).toContain("Sync failed");
+  expect(page({ status: "failed", failureCode: "provider_secret_failure" })).not.toContain("provider_secret_failure");
+  expect(page({ blockedReason: "cross_provider_identity_unresolved" })).toContain("Some songs still need a verified match");
+  expect(page({ blockedReason: "cross_provider_identity_unresolved" })).not.toContain("cross_provider_identity_unresolved");
+  expect(page({ blockedReason: "identities_incomplete" })).toContain("Some songs still need a verified match");
+  expect(page({ blockedReason: "provider_drift" })).toContain("Sync needs attention");
+  expect(page({ status: "synced", appliedRevision: 2 })).toContain("Synced");
+  expect(page({ status: "synced", appliedRevision: 1 })).toContain("Waiting to sync");
+});
+
+it("links only verified provider playlists and explains when the link has older songs", () => {
+  const publication = { ...view.publications[0]!, connected: true, status: "pending" as const, appliedRevision: 1,
+    verifiedPlaylistId: "p.library123", verifiedPlaylistUrl: "https://music.apple.com/us/playlist/road-trip/pl.public123" };
+  const page = threadPage({ ...view, publications: [publication] }, false);
+  expect(page).toContain(`href="${publication.verifiedPlaylistUrl}"`);
+  expect(page).toContain("Listen on Apple Music");
+  expect(page).toContain("Last verified playlist. Newer changes are not synced yet");
+  for (const url of ["javascript:alert(1)", "https://evil.example/playlist/123", "https://music.apple.com.evil.example/us/playlist/pl.public123"]) {
+    const unsafe = threadPage({ ...view, publications: [{ ...publication, verifiedPlaylistUrl: url }] }, false);
+    expect(unsafe).not.toContain('Listen on Apple Music');
+    expect(unsafe).not.toContain(url);
+  }
+  const spotify = { ...publication, provider: "spotify" as const, verifiedPlaylistId: "4SN5Kkig8iJ8vdwsOoP7IO", verifiedPlaylistUrl: "https://open.spotify.com/playlist/4SN5Kkig8iJ8vdwsOoP7IO" };
+  expect(threadPage({ ...view, publications: [spotify] }, false)).toContain("Listen on Spotify");
+  expect(threadPage({ ...view, publications: [{ ...spotify, verifiedPlaylistId: null }] }, false)).not.toContain("Listen on Spotify");
+  expect(threadPage({ ...view, publications: [{ ...spotify, appliedRevision: null }] }, false)).not.toContain("Listen on Spotify");
+  expect(threadPage({ ...view, publications: [{ ...spotify, connected: false }] }, false)).not.toContain("Listen on Spotify");
 });
