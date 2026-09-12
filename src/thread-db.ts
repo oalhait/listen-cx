@@ -64,7 +64,8 @@ export class D1ThreadStore {
          ORDER BY c.sort_order, c.position, c.id) s) AS songs,
       (SELECT json_group_array(json_object('provider', p.provider, 'requestedRevision', p.requested_revision,
         'appliedRevision', p.applied_revision, 'status', p.status, 'blockedReason', p.blocked_reason,
-        'failureCode', p.failure_code, 'verifiedPlaylistId', p.verified_playlist_id))
+        'failureCode', p.failure_code, 'verifiedPlaylistId', p.verified_playlist_id,
+        'connected', json(CASE p.connected WHEN 1 THEN 'true' ELSE 'false' END), 'verifiedPlaylistUrl', p.verified_playlist_url))
        FROM thread_publications p WHERE p.thread_id = t.id) AS publications
       FROM threads t WHERE t.public_capability = ?`).bind(capability).first<SnapshotRow>();
     if (!row) return null;
@@ -121,6 +122,10 @@ export class D1ThreadStore {
     if (!isManagementAuthorization(authorization)) throw new ThreadError(403, "forbidden", "Management access required.");
     const capability = authorization.publicCapability;
     return this.mutate(capability, request, request, (db, token) => {
+      if (request.kind === "connect") return [db.prepare(`UPDATE thread_publications SET connected = 1,
+        status = 'pending', blocked_reason = NULL, failure_code = NULL, next_attempt_at = 0
+        WHERE provider = ? AND thread_id = (SELECT id FROM threads WHERE public_capability = ? AND mutation_token = ?)`)
+        .bind(request.provider, capability, token)];
       if (request.kind === "close") return [db.prepare("UPDATE threads SET closed_at = datetime('now') WHERE public_capability = ? AND mutation_token = ?").bind(capability, token)];
       if (request.kind === "remove") return [db.prepare(`UPDATE thread_contributions SET removed_at = datetime('now')
         WHERE id = ? AND thread_id = (SELECT id FROM threads WHERE public_capability = ? AND mutation_token = ?)`)
@@ -148,6 +153,12 @@ export class D1ThreadStore {
       if (raced) return raced;
       throw new ThreadError(409, "stale_revision", "The Thread changed. Refresh and try again.");
     }
+    if ((intent.kind === "remove" || intent.kind === "reorder") && view.publications.some(p => p.provider === "apple" && p.connected)) {
+      throw new ThreadError(409, "apple_append_only", "Apple Music supports additions only. Remove and reorder are unavailable for this Thread.");
+    }
+    if (intent.kind === "connect" && view.publications.some(p => p.provider === intent.provider && p.connected)) {
+      throw new ThreadError(409, "already_connected", "This music app is already connected.");
+    }
     if (intent.kind === "reorder") {
       const activeIds = new Set(view.contributions.map(song => song.id));
       if (intent.ids.length !== activeIds.size || new Set(intent.ids).size !== activeIds.size || intent.ids.some(id => !activeIds.has(id))) {
@@ -163,11 +174,13 @@ export class D1ThreadStore {
     const db = this.db.withSession("first-primary");
     const token = nanoid(22);
     const addCondition = intent.kind === "add" ? `AND (SELECT COUNT(*) FROM thread_contributions WHERE thread_id = threads.id) < ${THREAD_TOTAL_LIMIT}` : "";
+    const editCondition = intent.kind === "remove" || intent.kind === "reorder"
+      ? "AND NOT EXISTS (SELECT 1 FROM thread_publications WHERE thread_id = threads.id AND provider = 'apple' AND connected = 1)" : "";
     const results = await db.batch([
       db.prepare(`UPDATE threads SET revision = revision + 1, mutation_token = ?
         WHERE public_capability = ? AND revision = ? AND closed_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM thread_mutations WHERE thread_id = threads.id AND request_key = ?)
-        ${addCondition} RETURNING revision`).bind(token, capability, request.expectedRevision, key),
+        ${addCondition} ${editCondition} RETURNING revision`).bind(token, capability, request.expectedRevision, key),
       ...statements(db, token, fingerprint),
       db.prepare(`INSERT INTO thread_mutations(thread_id, request_key, fingerprint, revision)
         SELECT id, ?, ?, revision FROM threads WHERE public_capability = ? AND mutation_token = ?`)

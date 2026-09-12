@@ -145,3 +145,47 @@ describe("durable Thread mutations", () => {
     expect((await store.getDesiredState(cap, "spotify"))!.entries[0]?.identity.status).toBe("unresolved");
   });
 });
+
+describe("Thread provider connections", () => {
+  it("locks remove and reorder after Apple connects, but still accepts additions and close", async () => {
+    const { view, authorization } = await setup();
+    await add(view.publicCapability, 0);
+    const id = (await store.get(view.publicCapability))!.contributions[0]!.id;
+    await store.manage(authorization, { kind: "connect", provider: "apple", requestKey: "connect", expectedRevision: 1 });
+    expect((await store.get(view.publicCapability))!.publications.find(p => p.provider === "apple")).toMatchObject({ connected: true, status: "pending", requestedRevision: 2 });
+    for (const intent of [{ kind: "remove" as const, id }, { kind: "reorder" as const, ids: [id] }]) {
+      await expect(store.manage(authorization, { ...intent, requestKey: intent.kind, expectedRevision: 2 })).rejects.toMatchObject({ code: "apple_append_only" });
+    }
+    expect((await store.get(view.publicCapability))!.revision).toBe(2);
+    await add(view.publicCapability, 2);
+    await store.manage(authorization, { kind: "close", requestKey: "close", expectedRevision: 3 });
+    expect((await store.get(view.publicCapability))!.revision).toBe(4);
+  });
+
+  it("keeps Spotify editable and replays earlier edits after Apple connects", async () => {
+    const { view, authorization } = await setup();
+    await add(view.publicCapability, 0);
+    const id = (await store.get(view.publicCapability))!.contributions[0]!.id;
+    await store.manage(authorization, { kind: "connect", provider: "spotify", requestKey: "spotify", expectedRevision: 1 });
+    const remove = { kind: "remove" as const, id, requestKey: "remove", expectedRevision: 2 };
+    await store.manage(authorization, remove);
+    await store.manage(authorization, { kind: "connect", provider: "apple", requestKey: "apple", expectedRevision: 3 });
+    expect(await store.manage(authorization, remove)).toEqual({ revision: 3, replayed: true });
+    expect((await store.get(view.publicCapability))!.revision).toBe(4);
+  });
+
+  it("serializes a connection racing an edit and never exposes private publisher keys", async () => {
+    const { view, authorization } = await setup();
+    await add(view.publicCapability, 0);
+    const id = (await store.get(view.publicCapability))!.contributions[0]!.id;
+    const results = await Promise.allSettled([
+      store.manage(authorization, { kind: "connect", provider: "apple", requestKey: "connect", expectedRevision: 1 }),
+      store.manage(authorization, { kind: "remove", id, requestKey: "remove", expectedRevision: 1 }),
+    ]);
+    expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
+    const current = (await store.get(view.publicCapability))!;
+    expect(current.revision).toBe(2);
+    expect(JSON.stringify(current)).not.toContain("publisherKey");
+    expect(JSON.stringify(current)).not.toContain("publisher_key");
+  });
+});

@@ -4,7 +4,7 @@ import type { ThreadView } from "./thread.js";
 
 const view: ThreadView = { publicCapability: "abcdefghijklmnopqrstuv", title: '<script>alert("x")</script>', revision: 2, closedAt: null, contributions: [
   { id: 1, title: "Song <one>", artist: "Artist", linkSlug: "2345678", artworkUrl: "javascript:alert(1)", source: { provider: "spotify", id: "4SN5Kkig8iJ8vdwsOoP7IO", storefront: "us", verified: true } },
-], publications: [{ provider: "apple", requestedRevision: 2, appliedRevision: null, verifiedPlaylistId: null, status: "blocked", blockedReason: "apple_sync_unavailable", failureCode: null }] };
+], publications: [{ provider: "apple", connected: false, requestedRevision: 2, appliedRevision: null, verifiedPlaylistId: null, verifiedPlaylistUrl: null, status: "blocked", blockedReason: "apple_sync_unavailable", failureCode: null }] };
 it("escapes Thread metadata and keeps scripts external", () => {
   const page = threadPage(view, false);
   expect(page).toContain("&lt;script&gt;");

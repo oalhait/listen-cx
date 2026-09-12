@@ -23,12 +23,14 @@ export interface ThreadContribution {
 
 export interface PublicationStatus {
   provider: Provider;
+  connected: boolean;
   requestedRevision: number;
   appliedRevision: number | null;
   status: "pending" | "blocked" | "failed" | "synced";
   blockedReason: string | null;
   failureCode: string | null;
   verifiedPlaylistId: string | null;
+  verifiedPlaylistUrl: string | null;
 }
 
 export interface ThreadView {
@@ -60,7 +62,7 @@ export interface MutationRequest {
   expectedRevision: number;
 }
 
-export type ManagementIntent = { kind: "remove"; id: number } | { kind: "reorder"; ids: number[] } | { kind: "close" };
+export type ManagementIntent = { kind: "remove"; id: number } | { kind: "reorder"; ids: number[] } | { kind: "close" } | { kind: "connect"; provider: Provider };
 export type MutationIntent = ManagementIntent | { kind: "add"; source: ParsedTrack };
 export interface MutationReceipt { revision: number; replayed: boolean }
 
@@ -97,6 +99,7 @@ export function mutationFingerprint(intent: MutationIntent): Promise<string> {
   if (intent.kind === "add") return sha256(JSON.stringify(["add", intent.source.provider, intent.source.id, intent.source.storefront]));
   if (intent.kind === "remove") return sha256(JSON.stringify(["remove", intent.id]));
   if (intent.kind === "reorder") return sha256(JSON.stringify(["reorder", intent.ids]));
+  if (intent.kind === "connect") return sha256(JSON.stringify(["connect", intent.provider]));
   return sha256("close");
 }
 
