@@ -1,3 +1,4 @@
+import { D1PublicationStore } from "./publication-db.js";
 import { D1ThreadStore } from "./thread-db.js";
 import { D1LinkStore } from "./db.js";
 import { ItunesClient } from "./itunes.js";
@@ -12,6 +13,10 @@ import {
 } from "./apple-music-auth.js";
 
 type ListenEnv = Env & AppleMusicAuthEnv;
+import { availablePublishers, type PublishingSecrets } from "./publishing-bindings.js";
+import { wakeDue } from "./thread-publisher.js";
+
+export { ThreadPublisher } from "./thread-publisher.js";
 
 export function getWorkerBaseUrl(env: { BASE_URL: string }, requestUrl: string): string {
   const request = new URL(requestUrl);
@@ -50,7 +55,7 @@ export function jamsAreEnabled(value: unknown, requestUrl: string): boolean {
 }
 
 export default {
-  fetch(request, env) {
+  fetch(request, env, ctx) {
     return createApp({
       resolver: new Resolver(new SpotifyClient(), new ItunesClient()),
       store: new D1LinkStore(env.DB),
@@ -59,6 +64,14 @@ export default {
       threadStore: new D1ThreadStore(env.DB),
       baseUrl: getWorkerBaseUrl(env, request.url),
       appleMusic: createAppleMusicIssuer(env),
+      publishing: {
+        availableProviders: availablePublishers(env),
+        onChange: capability => { ctx.waitUntil(wakeDue(env, capability)); },
+        retry: (authorization, provider) => new D1PublicationStore(env.DB).retry(authorization, provider),
+      },
     }).fetch(request);
   },
-} satisfies ExportedHandler<ListenEnv>;
+  scheduled(_controller, env, ctx) {
+    ctx.waitUntil(wakeDue(env));
+  },
+} satisfies ExportedHandler<ListenEnv & PublishingSecrets>;

@@ -20,7 +20,9 @@
   ],
   "vars": {
     "BASE_URL": "https://listen.cx",
-    "JAMS_ENABLED": false
+    "JAMS_ENABLED": false,
+    "SPOTIFY_PUBLISHING_ENABLED": "false",
+    "APPLE_PUBLISHING_ENABLED": "false"
   },
   "d1_databases": [
     {
@@ -48,7 +50,9 @@
       "routes": [],
       "vars": {
         "BASE_URL": "",
-        "JAMS_ENABLED": false
+        "JAMS_ENABLED": false,
+    "SPOTIFY_PUBLISHING_ENABLED": "false",
+        "APPLE_PUBLISHING_ENABLED": "false"
       },
       "d1_databases": [
         {
@@ -57,7 +61,20 @@
           "migrations_dir": "migrations",
           "database_id": "2ff66c94-3fee-4763-bc6c-771a5c91dd0e"
         }
-      ]
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "THREAD_PUBLISHER",
+            "class_name": "ThreadPublisher"
+          }
+        ]
+      },
+      "triggers": {
+        "crons": [
+          "* * * * *"
+        ]
+      }
     },
     "staging": {
       "name": "listen-cx-staging",
@@ -69,7 +86,9 @@
       ],
       "vars": {
         "BASE_URL": "https://staging.listen.cx",
-        "JAMS_ENABLED": false
+        "JAMS_ENABLED": false,
+    "SPOTIFY_PUBLISHING_ENABLED": "false",
+        "APPLE_PUBLISHING_ENABLED": "false"
       },
       "d1_databases": [
         {
@@ -78,7 +97,41 @@
           "database_id": "5c6403f5-eaa3-4dc2-befe-9b0bd8da4b9e",
           "migrations_dir": "migrations"
         }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "THREAD_PUBLISHER",
+            "class_name": "ThreadPublisher"
+          }
+        ]
+      },
+      "triggers": {
+        "crons": [
+          "* * * * *"
+        ]
+      }
+    }
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "THREAD_PUBLISHER",
+        "class_name": "ThreadPublisher"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "thread-publisher-v1",
+      "new_sqlite_classes": [
+        "ThreadPublisher"
       ]
     }
+  ],
+  "triggers": {
+    "crons": [
+      "* * * * *"
+    ]
   }
 }
