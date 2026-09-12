@@ -63,7 +63,7 @@ export class SpotifyPublisher {
   };
   constructor(options: SpotifyPublisher["options"]) {
     this.options = options;
-    this.fetcher = options.fetcher ?? fetch;
+    this.fetcher = options.fetcher ?? ((input, init) => fetch(input, init));
     this.sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
     this.now = options.now ?? Date.now;
   }
@@ -177,6 +177,12 @@ export class SpotifyPublisher {
         throw error;
       }
     } finally { this.busy.delete(playlistKey); }
+  }
+
+  async probePublisher(): Promise<string> {
+    const profile = await this.request("/me");
+    if (typeof profile.id !== "string" || !profile.id) throw new PublishingError("invalid_provider_response", 502);
+    return profile.id;
   }
 
   async recoverCreate(playlistKey: string, providerPlaylistId: string): Promise<Destination> {

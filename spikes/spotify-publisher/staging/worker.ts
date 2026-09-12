@@ -307,6 +307,10 @@ export class SpotifySpike extends DurableObject<Cloudflare.Env> {
       try {
         if (url.pathname === "/control/readback" && request.method === "GET") return json(await this.publisher.observe(url.searchParams.get("playlistKey") ?? ""));
         if (url.pathname === "/control/token-transport" && request.method === "GET") return await this.tokenTransport();
+        if (url.pathname === "/control/publisher-transport" && request.method === "GET") {
+          const publisher = await this.ctx.storage.get<Publisher>("publisher");
+          return json({ reachable: true, publisherMatches: Boolean(publisher && publisher.publisherId === await this.publisher.probePublisher()) });
+        }
         if (url.pathname === "/control/desired" && request.method === "PUT") {
           const desired = await input(request); validateDesired(desired);
           const result = await this.publisher.reconcile(desired);

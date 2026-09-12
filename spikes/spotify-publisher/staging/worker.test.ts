@@ -18,7 +18,8 @@ let providerHandler: (url: URL, init?: RequestInit) => Response | Promise<Respon
 beforeEach(async () => {
   await runInDurableObject(state(), async (_instance, context) => { await context.storage.deleteAll(); });
   providerHandler = () => { throw new Error("Unexpected provider request"); };
-  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request, init?: RequestInit) => {
+  vi.stubGlobal("fetch", vi.fn(function (this: unknown, input: string | URL | Request, init?: RequestInit) {
+    if (this !== undefined && this !== globalThis) throw new TypeError("Illegal invocation");
     const request = new Request(input, init);
     return providerHandler(new URL(request.url), init);
   }));
@@ -83,7 +84,7 @@ function providerPlaylists() {
 
 describe("isolated Spotify staging security and HTTP", () => {
   it("requires operator authorization for controls and keeps status private", async () => {
-    for (const path of ["/control/invitations", "/control/confirm", "/control/desired", "/control/status", "/control/readback?playlistKey=remote-spike", "/control/token-transport"]) {
+    for (const path of ["/control/invitations", "/control/confirm", "/control/desired", "/control/status", "/control/readback?playlistKey=remote-spike", "/control/token-transport", "/control/publisher-transport"]) {
       expect((await request(path, undefined, path.endsWith("status") || path.includes("readback") ? "GET" : "POST", {})).status).toBe(401);
     }
     const health = await http(origin + "/health");
@@ -97,6 +98,7 @@ describe("isolated Spotify staging security and HTTP", () => {
     const response = await request("/control/invitations", undefined, "POST", { ...control, Origin: "https://attacker.example" });
     expect(response.status).toBe(403);
     expect((await request("/control/token-transport", undefined, "GET", { ...control, Origin: "https://attacker.example" })).status).toBe(403);
+    expect((await request("/control/publisher-transport", undefined, "GET", { ...control, Origin: "https://attacker.example" })).status).toBe(403);
     expect(response.headers.has("access-control-allow-origin")).toBe(false);
     expect((await request("/control/confirm", { text: "x".repeat(65000) })).status).toBe(413);
   });
@@ -237,6 +239,15 @@ describe("isolated Spotify staging security and HTTP", () => {
     const response = await request("/control/token-transport", undefined, "GET");
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ reachable: true, status: 405 });
+  });
+
+  it("probes the confirmed publisher through the default edge fetcher without exposing profile data", async () => {
+    const flow = await authorize();
+    expect((await confirm(flow.candidate)).status).toBe(200);
+    providerPlaylists();
+    const response = await request("/control/publisher-transport", undefined, "GET");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ reachable: true, publisherMatches: true });
   });
 
   it("fails closed when the operator secret is absent instead of accepting Bearer undefined", async () => {
