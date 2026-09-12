@@ -23,6 +23,7 @@ async function check(name, path, expected, options = {}, requestOrigin = path.st
 await check("health", "/health", 200);
 await check("private status", "/control/status", 401);
 await check("private readback", "/control/readback?playlistKey=unconfigured-probe", 401);
+await check("private token transport", "/control/token-transport", 401);
 await check("unauthorized write", "/control/desired", 401, { method: "PUT", headers: { "Content-Type": "application/json" }, body: "{}" });
 await check("cross-origin control", "/control/invitations", 403, { method: "POST", headers: { ...operator, Origin: "https://attacker.example" } });
 await check("invalid callback", "/auth/callback?state=guessed&code=invalid", 400);

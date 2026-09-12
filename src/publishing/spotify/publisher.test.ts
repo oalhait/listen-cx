@@ -142,6 +142,13 @@ describe("Spotify publisher contract", () => {
     expect(f.calls.filter(c => c.path === "/me/playlists")).toHaveLength(1);
   });
 
+  it("uses an edge-supported redirect mode and treats provider redirects as unavailable", async () => {
+    const f = fixture();
+    f.faults.push(() => new Response(null, { status: 302, headers: { Location: "https://attacker.example/provider" } }));
+    await expect(f.publisher.reconcile(desired())).rejects.toMatchObject({ code: "provider_unavailable", status: 502 });
+    expect(f.fetcher.mock.calls[0]?.[1]?.redirect).toBe("manual");
+  });
+
   it("never replays ambiguous append and repairs with a full replacement on explicit retry", async () => {
     const f = fixture();
     const ids = Array(105).fill(A);

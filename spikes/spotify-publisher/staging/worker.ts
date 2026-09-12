@@ -9,6 +9,12 @@ type Flow = { stateHash: string; browserHash: string; expiresAt: number; verifie
 type Candidate = { candidateId: string; publisherId: string; expiresAt: number; tokens: Envelope };
 type Publisher = { clientId: string; publisherId: string; appMode: "development" | "extended-quota"; tokens: Envelope };
 type Failure = { status: number; message: string };
+type AuthorizationFailure = {
+  phase: "token_exchange" | "publisher_profile";
+  kind: "timeout" | "redirect" | "network" | "provider_response" | "unknown";
+  status: number | null;
+  observedAt: number;
+};
 
 const responseHeaders = {
   "Cache-Control": "no-store",
@@ -20,6 +26,13 @@ const responseHeaders = {
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: responseHeaders });
 const random = () => Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");
 const digest = async (value: string) => Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))).toString("hex");
+const redirected = (response: Response) => response.status >= 300 && response.status < 400;
+const transportFailureKind = (error: unknown): AuthorizationFailure["kind"] => {
+  const name = error && typeof error === "object" && "name" in error ? String(error.name) : "";
+  if (name === "TimeoutError" || name === "AbortError") return "timeout";
+  if (error instanceof TypeError) return "network";
+  return "unknown";
+};
 
 async function boundedText(body: ReadableStream<Uint8Array> | null, limit: number): Promise<string> {
   if (!body) return "";
@@ -103,10 +116,22 @@ export class SpotifySpike extends DurableObject<Cloudflare.Env> {
       response = await fetch("https://accounts.spotify.com/api/token", {
         method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({ client_id: this.env.SPOTIFY_CLIENT_ID, ...parameters }),
-        signal: AbortSignal.timeout(10000), redirect: "error",
+        signal: AbortSignal.timeout(10000), redirect: "manual",
       });
-    } catch { throw new PublishingError("authorization_unavailable", 502); }
-    if (!response.ok) { await response.body?.cancel(); throw new PublishingError("authorization_required", 401); }
+    } catch (error) {
+      await this.rememberAuthorizationFailure("token_exchange", transportFailureKind(error));
+      throw new PublishingError("authorization_unavailable", 502);
+    }
+    if (redirected(response)) {
+      await response.body?.cancel();
+      await this.rememberAuthorizationFailure("token_exchange", "redirect", response.status);
+      throw new PublishingError("authorization_unavailable", 502);
+    }
+    if (!response.ok) {
+      await response.body?.cancel();
+      await this.rememberAuthorizationFailure("token_exchange", "provider_response", response.status);
+      throw new PublishingError("authorization_required", 401);
+    }
     let body: Record<string, unknown>;
     try { body = JSON.parse(await boundedText(response.body, 16000)); }
     catch { throw new PublishingError("invalid_token_response", 502); }
@@ -114,6 +139,22 @@ export class SpotifySpike extends DurableObject<Cloudflare.Env> {
     if (typeof body.access_token !== "string" || typeof refreshToken !== "string" || typeof body.expires_in !== "number" || !Number.isFinite(body.expires_in) || body.expires_in <= 0
       || (body.scope !== undefined && (typeof body.scope !== "string" || !body.scope.split(" ").includes("playlist-modify-public")))) throw new PublishingError("invalid_token_response", 502);
     return { accessToken: body.access_token, refreshToken, expiresAt: Date.now() + body.expires_in * 1000 };
+  }
+
+  private async rememberAuthorizationFailure(phase: AuthorizationFailure["phase"], kind: AuthorizationFailure["kind"], status: number | null = null) {
+    await this.ctx.storage.put<AuthorizationFailure>("lastAuthorizationFailure", { phase, kind, status, observedAt: Date.now() });
+  }
+
+  private async tokenTransport(): Promise<Response> {
+    let response;
+    try {
+      response = await fetch("https://accounts.spotify.com/api/token", { method: "GET", signal: AbortSignal.timeout(10000), redirect: "manual" });
+    } catch (error) {
+      return json({ reachable: false, kind: transportFailureKind(error) }, 502);
+    }
+    const status = response.status;
+    await response.body?.cancel();
+    return redirected(response) ? json({ reachable: false, kind: "redirect", status }, 502) : json({ reachable: true, status });
   }
 
   private async accessToken(): Promise<string> {
@@ -195,8 +236,16 @@ export class SpotifySpike extends DurableObject<Cloudflare.Env> {
     const verifier = await this.unseal<string>(flow.verifier, "verifier");
     const tokens = await this.exchange({ grant_type: "authorization_code", code, redirect_uri: `${this.env.PUBLIC_ORIGIN}/auth/callback`, code_verifier: verifier });
     let profile;
-    try { profile = await fetch("https://api.spotify.com/v1/me", { headers: { Authorization: `Bearer ${tokens.accessToken}` }, signal: AbortSignal.timeout(10000), redirect: "error" }); }
-    catch { throw new PublishingError("publisher_verification_unavailable", 502); }
+    try { profile = await fetch("https://api.spotify.com/v1/me", { headers: { Authorization: `Bearer ${tokens.accessToken}` }, signal: AbortSignal.timeout(10000), redirect: "manual" }); }
+    catch (error) {
+      await this.rememberAuthorizationFailure("publisher_profile", transportFailureKind(error));
+      throw new PublishingError("publisher_verification_unavailable", 502);
+    }
+    if (redirected(profile)) {
+      await profile.body?.cancel();
+      await this.rememberAuthorizationFailure("publisher_profile", "redirect", profile.status);
+      throw new PublishingError("publisher_verification_unavailable", 502);
+    }
     if (!profile.ok) {
       let message = "Provider rejected publisher verification";
       try {
@@ -208,6 +257,7 @@ export class SpotifySpike extends DurableObject<Cloudflare.Env> {
         }
       } catch { message = "Provider error response unavailable"; }
       await this.ctx.storage.put<Failure>("lastVerificationFailure", { status: profile.status, message });
+      await this.rememberAuthorizationFailure("publisher_profile", "provider_response", profile.status);
       throw new PublishingError("publisher_verification_failed", profile.status);
     }
     let me: { id?: unknown };
@@ -216,7 +266,7 @@ export class SpotifySpike extends DurableObject<Cloudflare.Env> {
     const existing = await this.ctx.storage.get<Publisher>("publisher");
     if (existing && (existing.clientId !== this.env.SPOTIFY_CLIENT_ID || existing.publisherId !== me.id)) throw new PublishingError("publisher_mismatch", 403);
     const candidate: Candidate = { candidateId: random(), publisherId: me.id, expiresAt: tokens.expiresAt, tokens: await this.seal(tokens, "tokens") };
-    await this.ctx.storage.transaction(async tx => { await tx.put("candidate", candidate); await tx.delete("lastVerificationFailure"); });
+    await this.ctx.storage.transaction(async tx => { await tx.put("candidate", candidate); await tx.delete(["lastVerificationFailure", "lastAuthorizationFailure"]); });
     const response = json({ authorizationReceived: true, message: "Spotify authorization received. Omar must confirm the publisher before publishing." });
     response.headers.set("Set-Cookie", "__Host-spotify-spike=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax");
     return response;
@@ -248,6 +298,7 @@ export class SpotifySpike extends DurableObject<Cloudflare.Env> {
         const destinations = await this.ctx.storage.list<Destination>({ prefix: "destination:" });
         return json({ authorized: Boolean(publisher && publisher.clientId === this.env.SPOTIFY_CLIENT_ID), publisherId: publisher?.publisherId ?? null, appMode: publisher?.appMode ?? "unverified",
           candidate: candidate ? { candidateId: candidate.candidateId, publisherId: candidate.publisherId, expiresAt: candidate.expiresAt } : null,
+          lastAuthorizationFailure: await this.ctx.storage.get<AuthorizationFailure>("lastAuthorizationFailure") ?? null,
           lastVerificationFailure: await this.ctx.storage.get<Failure>("lastVerificationFailure") ?? null,
           destinations: [...destinations.values()].map(row => ({ playlistKey: row.desired.playlistKey, providerPlaylistId: row.providerPlaylistId, appliedRevision: row.appliedRevision, revision: row.desired.revision, createUnresolved: row.createUnresolved })) });
       }
@@ -255,6 +306,7 @@ export class SpotifySpike extends DurableObject<Cloudflare.Env> {
       this.operationBusy = true;
       try {
         if (url.pathname === "/control/readback" && request.method === "GET") return json(await this.publisher.observe(url.searchParams.get("playlistKey") ?? ""));
+        if (url.pathname === "/control/token-transport" && request.method === "GET") return await this.tokenTransport();
         if (url.pathname === "/control/desired" && request.method === "PUT") {
           const desired = await input(request); validateDesired(desired);
           const result = await this.publisher.reconcile(desired);

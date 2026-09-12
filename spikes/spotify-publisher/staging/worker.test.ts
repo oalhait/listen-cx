@@ -18,7 +18,10 @@ let providerHandler: (url: URL, init?: RequestInit) => Response | Promise<Respon
 beforeEach(async () => {
   await runInDurableObject(state(), async (_instance, context) => { await context.storage.deleteAll(); });
   providerHandler = () => { throw new Error("Unexpected provider request"); };
-  vi.stubGlobal("fetch", vi.fn((input: string | URL, init?: RequestInit) => providerHandler(new URL(String(input)), init)));
+  vi.stubGlobal("fetch", vi.fn((input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init);
+    return providerHandler(new URL(request.url), init);
+  }));
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
@@ -45,7 +48,8 @@ async function begin() {
   return { invitation, response, location, cookie, callback: `${browserOrigin}/auth/callback?code=consent-code&state=${location.searchParams.get("state")}` };
 }
 function providerAuth(status = 200, expiresIn = 3600) {
-  providerHandler = (url) => {
+  providerHandler = (url, init) => {
+    expect(init?.redirect).toBe("manual");
     if (url.href === "https://accounts.spotify.com/api/token") return Response.json({ access_token: "provider-access-secret", refresh_token: "provider-refresh-secret", expires_in: expiresIn, scope: "playlist-modify-public", token_type: "Bearer" });
     if (url.href === "https://api.spotify.com/v1/me") return Response.json(status === 200 ? { id: "friend-owner", account_id: "immutable-friend" } : { error: { status, message: "The user is not registered for this application." } }, { status });
     throw new Error("Unexpected provider request");
@@ -79,7 +83,7 @@ function providerPlaylists() {
 
 describe("isolated Spotify staging security and HTTP", () => {
   it("requires operator authorization for controls and keeps status private", async () => {
-    for (const path of ["/control/invitations", "/control/confirm", "/control/desired", "/control/status", "/control/readback?playlistKey=remote-spike"]) {
+    for (const path of ["/control/invitations", "/control/confirm", "/control/desired", "/control/status", "/control/readback?playlistKey=remote-spike", "/control/token-transport"]) {
       expect((await request(path, undefined, path.endsWith("status") || path.includes("readback") ? "GET" : "POST", {})).status).toBe(401);
     }
     const health = await http(origin + "/health");
@@ -92,6 +96,7 @@ describe("isolated Spotify staging security and HTTP", () => {
     expect((await http("https://attacker.example/health")).status).toBe(400);
     const response = await request("/control/invitations", undefined, "POST", { ...control, Origin: "https://attacker.example" });
     expect(response.status).toBe(403);
+    expect((await request("/control/token-transport", undefined, "GET", { ...control, Origin: "https://attacker.example" })).status).toBe(403);
     expect(response.headers.has("access-control-allow-origin")).toBe(false);
     expect((await request("/control/confirm", { text: "x".repeat(65000) })).status).toBe(413);
   });
@@ -171,6 +176,69 @@ describe("isolated Spotify staging security and HTTP", () => {
     const current = await (await request("/control/status", undefined, "GET")).json();
     expect(current).toMatchObject({ authorized: false, lastVerificationFailure: { status: 403, message: "The user is not registered for this application." } });
   });
+
+  it("uses an edge-supported redirect mode and records token redirects without following them", async () => {
+    const flow = await begin();
+    providerHandler = (url, init) => {
+      expect(url.href).toBe("https://accounts.spotify.com/api/token");
+      expect(init?.redirect).toBe("manual");
+      return new Response(null, { status: 302, headers: { Location: "https://attacker.example/token" } });
+    };
+    const callback = await http(flow.callback, { headers: { Cookie: flow.cookie } });
+    expect(callback.status).toBe(502);
+    expect(await callback.json()).toEqual({ error: "authorization_unavailable" });
+    const current = await (await request("/control/status", undefined, "GET")).json();
+    expect(current).toMatchObject({
+      authorized: false,
+      lastAuthorizationFailure: { phase: "token_exchange", kind: "redirect", status: 302 },
+    });
+    expect(JSON.stringify(current)).not.toContain("attacker.example");
+  });
+
+  it.each([
+    [new DOMException("timed out", "TimeoutError"), "timeout"],
+    [new TypeError("network failed"), "network"],
+    [new Error("unexpected failure"), "unknown"],
+  ])("records bounded token transport classification for %s", async (error, kind) => {
+    const flow = await begin();
+    providerHandler = () => { throw error; };
+    const callback = await http(flow.callback, { headers: { Cookie: flow.cookie } });
+    expect(callback.status).toBe(502);
+    const current = await (await request("/control/status", undefined, "GET")).json();
+    expect(current).toMatchObject({ lastAuthorizationFailure: { phase: "token_exchange", kind, status: null } });
+    expect(JSON.stringify(current)).not.toMatch(/timed out|network failed|unexpected failure/);
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "https://accounts.spotify.com/api/token")).toHaveLength(1);
+  });
+
+  it("rejects publisher profile redirects without exposing their destination", async () => {
+    const flow = await begin();
+    providerHandler = (url, init) => {
+      expect(init?.redirect).toBe("manual");
+      if (url.href === "https://accounts.spotify.com/api/token") return Response.json({ access_token: "provider-access-secret", refresh_token: "provider-refresh-secret", expires_in: 3600, scope: "playlist-modify-public" });
+      return new Response(null, { status: 307, headers: { Location: "https://attacker.example/profile" } });
+    };
+    const callback = await http(flow.callback, { headers: { Cookie: flow.cookie } });
+    expect(callback.status).toBe(502);
+    expect(await callback.json()).toEqual({ error: "publisher_verification_unavailable" });
+    const current = await (await request("/control/status", undefined, "GET")).json();
+    expect(current).toMatchObject({ authorized: false, candidate: null, lastAuthorizationFailure: { phase: "publisher_profile", kind: "redirect", status: 307 } });
+    expect(JSON.stringify(current)).not.toContain("attacker.example");
+  });
+
+  it("probes Spotify token transport without credentials or response data", async () => {
+    providerHandler = (url, init) => {
+      expect(url.href).toBe("https://accounts.spotify.com/api/token");
+      expect(init?.method).toBe("GET");
+      expect(init?.headers).toBeUndefined();
+      expect(init?.body).toBeUndefined();
+      expect(init?.redirect).toBe("manual");
+      return new Response(null, { status: 405 });
+    };
+    const response = await request("/control/token-transport", undefined, "GET");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ reachable: true, status: 405 });
+  });
+
   it("fails closed when the operator secret is absent instead of accepting Bearer undefined", async () => {
     const missing = { ...env };
     Reflect.deleteProperty(missing, "OPERATOR_TOKEN");

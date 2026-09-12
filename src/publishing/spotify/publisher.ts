@@ -235,9 +235,13 @@ export class SpotifyPublisher {
     try {
       response = await this.fetcher(`https://api.spotify.com/v1${path}`, {
         method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(10_000), redirect: "error",
+        body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(10_000), redirect: "manual",
       });
     } catch {
+      throw new PublishingError(method === "GET" ? "provider_unavailable" : "ambiguous_write", 502);
+    }
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel();
       throw new PublishingError(method === "GET" ? "provider_unavailable" : "ambiguous_write", 502);
     }
     if (!response.ok) {
