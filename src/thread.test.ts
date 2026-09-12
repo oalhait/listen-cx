@@ -20,6 +20,32 @@ describe("Thread contracts", () => {
     expect(await mutationFingerprint({ kind: "reorder", ids: [1, 2] })).not.toBe(await mutationFingerprint({ kind: "reorder", ids: [2, 1] }));
     expect(await mutationFingerprint({ kind: "close" })).toBe(await mutationFingerprint({ kind: "close" }));
   });
+  it("fingerprints counterpart identities by contribution, provider, catalog ID and storefront", async () => {
+    const intent = { kind: "identify" as const, id: 7, identity: { provider: "apple" as const, id: "123", storefront: "us" } };
+    const fingerprint = await mutationFingerprint(intent);
+    expect(await mutationFingerprint({ ...intent })).toBe(fingerprint);
+    expect(await mutationFingerprint({ ...intent, id: 8 })).not.toBe(fingerprint);
+    expect(await mutationFingerprint({ ...intent, identity: { ...intent.identity, id: "124" } })).not.toBe(fingerprint);
+    expect(await mutationFingerprint({ ...intent, identity: { ...intent.identity, storefront: "gb" } })).not.toBe(fingerprint);
+    expect(await mutationFingerprint({ ...intent, identity: { ...intent.identity, provider: "spotify" } })).not.toBe(fingerprint);
+  });
+  it("uses only confirmed counterparts while preserving source identities, duplicate songs and order", () => {
+    const song = { id: 7, title: "Song", artist: "Artist", linkSlug: "2345678", artworkUrl: null,
+      source: { provider: "spotify" as const, id: "4SN5Kkig8iJ8vdwsOoP7IO", storefront: "us", verified: true },
+      counterpart: { provider: "apple" as const, id: "123", storefront: "gb", confirmed: true as const } };
+    const snapshot = { publicCapability: "abcdefghijklmnopqrstuv", title: "Road trip", revision: 4, closedAt: null,
+      contributions: [song, { ...song, id: 9 }], publications: [] };
+    expect(desiredState(snapshot, "apple").entries.map(entry => entry.identity)).toEqual([
+      { status: "verified", id: "123", storefront: "gb" }, { status: "verified", id: "123", storefront: "gb" },
+    ]);
+    expect(desiredState(snapshot, "apple").identitiesComplete).toBe(true);
+    expect(desiredState(snapshot, "spotify").entries.map(entry => entry.contributionId)).toEqual([7, 9]);
+    expect(desiredState(snapshot, "spotify").entries[0]?.identity).toEqual({ status: "verified", id: song.source.id, storefront: "us" });
+    snapshot.contributions[0]!.source.verified = false;
+    for (const provider of ["apple", "spotify"] as const) {
+      expect(desiredState(snapshot, provider).entries[0]?.identity).toEqual({ status: "unresolved", reason: "legacy_source_not_verified" });
+    }
+  });
   it("verifies the resolved catalog identity only for the input provider", () => {
     expect(verifiedSource("https://open.spotify.com/track/4SN5Kkig8iJ8vdwsOoP7IO", track)).toMatchObject({ provider: "spotify", id: "4SN5Kkig8iJ8vdwsOoP7IO" });
     expect(() => verifiedSource("https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC", track)).toThrow();

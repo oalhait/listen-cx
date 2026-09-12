@@ -19,6 +19,7 @@ export interface ThreadContribution {
   artworkUrl: string | null;
   linkSlug: string;
   source: ParsedTrack & { verified: boolean };
+  counterpart?: ParsedTrack & { confirmed: true };
 }
 
 export interface PublicationStatus {
@@ -62,7 +63,7 @@ export interface MutationRequest {
   expectedRevision: number;
 }
 
-export type ManagementIntent = { kind: "remove"; id: number } | { kind: "reorder"; ids: number[] } | { kind: "close" } | { kind: "connect"; provider: Provider };
+export type ManagementIntent = { kind: "remove"; id: number } | { kind: "reorder"; ids: number[] } | { kind: "close" } | { kind: "connect"; provider: Provider } | { kind: "identify"; id: number; identity: ParsedTrack };
 export type MutationIntent = ManagementIntent | { kind: "add"; source: ParsedTrack };
 export interface MutationReceipt { revision: number; replayed: boolean }
 
@@ -97,6 +98,7 @@ export async function sha256(value: string): Promise<string> {
 
 export function mutationFingerprint(intent: MutationIntent): Promise<string> {
   if (intent.kind === "add") return sha256(JSON.stringify(["add", intent.source.provider, intent.source.id, intent.source.storefront]));
+  if (intent.kind === "identify") return sha256(JSON.stringify(["identify", intent.id, intent.identity.provider, intent.identity.id, intent.identity.storefront]));
   if (intent.kind === "remove") return sha256(JSON.stringify(["remove", intent.id]));
   if (intent.kind === "reorder") return sha256(JSON.stringify(["reorder", intent.ids]));
   if (intent.kind === "connect") return sha256(JSON.stringify(["connect", intent.provider]));
@@ -115,11 +117,13 @@ export function verifiedSource(rawUrl: string, resolved: Resolved): ParsedTrack 
 
 export function desiredState(view: ThreadView, provider: Provider): DesiredState {
   const entries = view.contributions.map(song => {
+    const catalog = song.source.provider === provider ? song.source
+      : song.counterpart?.confirmed && song.counterpart.provider === provider ? song.counterpart : null;
     const identity: CatalogIdentity = !song.source.verified
       ? { status: "unresolved", reason: "legacy_source_not_verified" }
-      : song.source.provider !== provider
+      : !catalog
         ? { status: "unresolved", reason: "cross_provider_identity_unresolved" }
-        : { status: "verified", id: song.source.id, storefront: song.source.storefront };
+        : { status: "verified", id: catalog.id, storefront: catalog.storefront };
     return { contributionId: song.id, title: song.title, artist: song.artist, identity };
   });
   return { publicCapability: view.publicCapability, title: view.title, revision: view.revision, closed: view.closedAt !== null, provider, publication: view.publications.find(publication => publication.provider === provider) ?? null, identitiesComplete: entries.every(entry => entry.identity.status === "verified"), entries };

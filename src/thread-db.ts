@@ -55,10 +55,12 @@ export class D1ThreadStore {
     if (!isThreadCapability(capability)) return null;
     const row = await this.db.withSession("first-primary").prepare(`SELECT
       t.public_capability, t.title, t.revision, t.closed_at,
-      (SELECT json_group_array(json_object('id', s.id, 'title', s.title, 'artist', s.artist,
+      (SELECT json_group_array(json_patch(json_object('id', s.id, 'title', s.title, 'artist', s.artist,
         'artworkUrl', s.artwork_url, 'linkSlug', s.link_slug,
         'source', json_object('provider', s.source_provider, 'id', s.source_catalog_id,
-        'storefront', s.source_storefront, 'verified', json(CASE s.source_verified WHEN 1 THEN 'true' ELSE 'false' END))))
+        'storefront', s.source_storefront, 'verified', json(CASE s.source_verified WHEN 1 THEN 'true' ELSE 'false' END))),
+        COALESCE((SELECT json_object('counterpart', json_object('provider', i.provider, 'id', i.catalog_id,
+          'storefront', i.storefront, 'confirmed', json('true'))) FROM thread_identities i WHERE i.contribution_id = s.id), '{}')))
        FROM (SELECT c.*, l.title, l.artist, l.artwork_url FROM thread_contributions c
          JOIN links l ON l.slug = c.link_slug WHERE c.thread_id = t.id AND c.removed_at IS NULL
          ORDER BY c.sort_order, c.position, c.id) s) AS songs,
@@ -122,6 +124,10 @@ export class D1ThreadStore {
     if (!isManagementAuthorization(authorization)) throw new ThreadError(403, "forbidden", "Management access required.");
     const capability = authorization.publicCapability;
     return this.mutate(capability, request, request, (db, token) => {
+      if (request.kind === "identify") return [db.prepare(`INSERT INTO thread_identities(contribution_id, provider, catalog_id, storefront)
+        SELECT c.id, ?, ?, ? FROM thread_contributions c JOIN threads t ON t.id = c.thread_id
+        WHERE c.id = ? AND t.public_capability = ? AND t.mutation_token = ?`)
+        .bind(request.identity.provider, request.identity.id, request.identity.storefront, request.id, capability, token)];
       if (request.kind === "connect") return [db.prepare(`UPDATE thread_publications SET connected = 1,
         status = 'pending', blocked_reason = NULL, failure_code = NULL, next_attempt_at = 0
         WHERE provider = ? AND thread_id = (SELECT id FROM threads WHERE public_capability = ? AND mutation_token = ?)`)
@@ -168,6 +174,17 @@ export class D1ThreadStore {
     if (intent.kind === "remove" && !view.contributions.some(song => song.id === intent.id)) {
       throw new ThreadError(404, "contribution_not_found", "This song is not in the Thread.");
     }
+    if (intent.kind === "identify") {
+      const song = view.contributions.find(song => song.id === intent.id);
+      if (!song) throw new ThreadError(404, "contribution_not_found", "This song is not in the Thread.");
+      if (!song.source.verified) throw new ThreadError(422, "unverified_source", "This song's source catalog identity has not been verified.");
+      const { provider, id, storefront } = intent.identity;
+      if (provider === song.source.provider || !/^[a-z]{2}$/.test(storefront)
+        || (provider === "spotify" ? !/^[A-Za-z0-9]{22}$/.test(id) || storefront !== "us" : provider !== "apple" || !/^[0-9]+$/.test(id))) {
+        throw new ThreadError(400, "invalid_counterpart", "Choose a verified track from the other music app.");
+      }
+      if (song.counterpart) throw new ThreadError(409, "identity_already_confirmed", "This song already has a confirmed counterpart.");
+    }
     if (intent.kind === "add" && view.contributions.length >= THREAD_ACTIVE_LIMIT) {
       throw new ThreadError(409, "full", `A Thread can contain up to ${THREAD_ACTIVE_LIMIT} songs.`);
     }
@@ -176,11 +193,16 @@ export class D1ThreadStore {
     const addCondition = intent.kind === "add" ? `AND (SELECT COUNT(*) FROM thread_contributions WHERE thread_id = threads.id) < ${THREAD_TOTAL_LIMIT}` : "";
     const editCondition = intent.kind === "remove" || intent.kind === "reorder"
       ? "AND NOT EXISTS (SELECT 1 FROM thread_publications WHERE thread_id = threads.id AND provider = 'apple' AND connected = 1)" : "";
+    const identityCondition = intent.kind === "identify" ? `AND EXISTS (
+      SELECT 1 FROM thread_contributions c WHERE c.id = ? AND c.thread_id = threads.id
+      AND c.removed_at IS NULL AND c.source_verified = 1 AND c.source_provider != ?
+      AND NOT EXISTS (SELECT 1 FROM thread_identities i WHERE i.contribution_id = c.id))` : "";
+    const identityBindings = intent.kind === "identify" ? [intent.id, intent.identity.provider] : [];
     const results = await db.batch([
       db.prepare(`UPDATE threads SET revision = revision + 1, mutation_token = ?
         WHERE public_capability = ? AND revision = ? AND closed_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM thread_mutations WHERE thread_id = threads.id AND request_key = ?)
-        ${addCondition} ${editCondition} RETURNING revision`).bind(token, capability, request.expectedRevision, key),
+        ${addCondition} ${editCondition} ${identityCondition} RETURNING revision`).bind(token, capability, request.expectedRevision, key, ...identityBindings),
       ...statements(db, token, fingerprint),
       db.prepare(`INSERT INTO thread_mutations(thread_id, request_key, fingerprint, revision)
         SELECT id, ?, ?, revision FROM threads WHERE public_capability = ? AND mutation_token = ?`)
@@ -189,6 +211,7 @@ export class D1ThreadStore {
     if (results[0]?.results.length === 1) return { revision: request.expectedRevision + 1, replayed: false };
     const raced = await this.preflight(capability, key, fingerprint, request.expectedRevision);
     if (raced) return raced;
+    if (intent.kind === "identify") throw new ThreadError(409, "identity_conflict", "This song changed. Refresh and try again.");
     throw new ThreadError(409, "contribution_limit", "This Thread has reached its contribution limit.");
   }
 }

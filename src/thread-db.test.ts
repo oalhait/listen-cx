@@ -8,6 +8,7 @@ import type { Resolved } from "./resolve.js";
 
 const store = new D1ThreadStore(env.DB);
 const spotify = { provider: "spotify" as const, id: "4SN5Kkig8iJ8vdwsOoP7IO", storefront: "us" };
+const apple = { provider: "apple" as const, id: "1470228104", storefront: "gb" };
 const track: Resolved = { title: "Cataracts", artist: "Freddie Gibbs, Madlib", artworkUrl: null, spotifyUrl: `https://open.spotify.com/track/${spotify.id}`, appleUrl: null, isrc: null, complete: false };
 const add = (cap: string, revision: number, key = nanoid()) => store.add(cap, { expectedRevision: revision, requestKey: key, source: spotify, track });
 async function setup() {
@@ -143,6 +144,161 @@ describe("durable Thread mutations", () => {
     const current = (await store.get(cap))!;
     expect(current.contributions[0]?.source.verified).toBe(false);
     expect((await store.getDesiredState(cap, "spotify"))!.entries[0]?.identity.status).toBe("unresolved");
+  });
+});
+
+describe("Thread confirmed counterparts", () => {
+  it("durably resolves only the selected contribution without changing source metadata or URLs", async () => {
+    const { view, authorization } = await setup();
+    await add(view.publicCapability, 0);
+    await add(view.publicCapability, 1);
+    const before = (await store.get(view.publicCapability))!;
+    const id = before.contributions[0]!.id;
+    expect(await store.manage(authorization, { kind: "identify", id, identity: apple, requestKey: "identify", expectedRevision: 2 }))
+      .toEqual({ revision: 3, replayed: false });
+    const after = (await new D1ThreadStore(env.DB).get(view.publicCapability))!;
+    expect(after.contributions).toEqual([{ ...before.contributions[0], counterpart: { ...apple, confirmed: true } }, before.contributions[1]]);
+    expect((await store.getDesiredState(view.publicCapability, "apple"))!.entries.map(entry => entry.identity)).toEqual([
+      { status: "verified", id: apple.id, storefront: "gb" }, { status: "unresolved", reason: "cross_provider_identity_unresolved" },
+    ]);
+    expect((await store.getDesiredState(view.publicCapability, "spotify"))!.identitiesComplete).toBe(true);
+    expect(await env.DB.prepare("SELECT spotify_url, apple_url FROM links WHERE slug = ?").bind(before.contributions[0]!.linkSlug).first())
+      .toEqual({ spotify_url: track.spotifyUrl, apple_url: null });
+  });
+
+  it("keeps a counterpart immutable and replays its receipt after connections and closure", async () => {
+    const { view, authorization } = await setup();
+    await add(view.publicCapability, 0);
+    const id = (await store.get(view.publicCapability))!.contributions[0]!.id;
+    const request = { kind: "identify" as const, id, identity: apple, requestKey: "identify", expectedRevision: 1 };
+    await store.manage(authorization, request);
+    await expect(store.manage(authorization, { ...request, identity: { ...apple, storefront: "us" } }))
+      .rejects.toMatchObject({ code: "request_conflict" });
+    await expect(store.manage(authorization, { ...request, expectedRevision: 2, requestKey: "replace", identity: { ...apple, id: "999" } }))
+      .rejects.toMatchObject({ code: "identity_already_confirmed" });
+    await store.manage(authorization, { kind: "connect", provider: "apple", requestKey: "connect", expectedRevision: 2 });
+    await store.manage(authorization, { kind: "close", requestKey: "close", expectedRevision: 3 });
+    expect(await store.manage(authorization, request)).toEqual({ revision: 2, replayed: true });
+    expect((await store.get(view.publicCapability))!.revision).toBe(4);
+  });
+
+  it("allows counterpart confirmation after Apple connects", async () => {
+    const { view, authorization } = await setup();
+    await add(view.publicCapability, 0);
+    const id = (await store.get(view.publicCapability))!.contributions[0]!.id;
+    await store.manage(authorization, { kind: "connect", provider: "apple", requestKey: "connect", expectedRevision: 1 });
+    await store.manage(authorization, { kind: "identify", id, identity: apple, requestKey: "identify", expectedRevision: 2 });
+    expect((await store.getDesiredState(view.publicCapability, "apple"))!).toMatchObject({
+      identitiesComplete: true, publication: { connected: true, requestedRevision: 3, status: "pending" },
+    });
+  });
+
+  it("resolves a Spotify counterpart for an Apple source without changing its storefront", async () => {
+    const { view, authorization } = await setup();
+    await store.add(view.publicCapability, { expectedRevision: 0, requestKey: "apple", source: apple,
+      track: { ...track, spotifyUrl: null, appleUrl: `https://music.apple.com/gb/song/${apple.id}` } });
+    const id = (await store.get(view.publicCapability))!.contributions[0]!.id;
+    await store.manage(authorization, { kind: "identify", id, identity: spotify, requestKey: "identify", expectedRevision: 1 });
+    expect((await store.getDesiredState(view.publicCapability, "spotify"))!.entries[0]!.identity)
+      .toEqual({ status: "verified", id: spotify.id, storefront: "us" });
+    expect((await store.getDesiredState(view.publicCapability, "apple"))!.entries[0]!.identity)
+      .toEqual({ status: "verified", id: apple.id, storefront: "gb" });
+  });
+
+  it("rejects source-provider identities, malformed identities, removed songs and other Thread IDs", async () => {
+    const { view, authorization } = await setup();
+    const other = await setup();
+    await add(view.publicCapability, 0);
+    await add(other.view.publicCapability, 0);
+    const id = (await store.get(view.publicCapability))!.contributions[0]!.id;
+    const otherId = (await store.get(other.view.publicCapability))!.contributions[0]!.id;
+    for (const identity of [spotify, { ...apple, id: "not-a-catalog-id" }, { ...apple, storefront: "GB" }]) {
+      await expect(store.manage(authorization, { kind: "identify", id, identity, requestKey: "invalid", expectedRevision: 1 }))
+        .rejects.toMatchObject({ code: "invalid_counterpart" });
+    }
+    await expect(store.manage(authorization, { kind: "identify", id: otherId, identity: apple, requestKey: "other", expectedRevision: 1 }))
+      .rejects.toMatchObject({ code: "contribution_not_found" });
+    expect((await store.get(view.publicCapability))!.revision).toBe(1);
+    await store.manage(authorization, { kind: "remove", id, requestKey: "remove", expectedRevision: 1 });
+    await expect(store.manage(authorization, { kind: "identify", id, identity: apple, requestKey: "removed", expectedRevision: 2 }))
+      .rejects.toMatchObject({ code: "contribution_not_found" });
+  });
+
+  it("never promotes legacy source rows or their guessed cross-provider URLs", async () => {
+    const { view, authorization } = await setup();
+    await add(view.publicCapability, 0);
+    const song = (await store.get(view.publicCapability))!.contributions[0]!;
+    await env.DB.prepare("UPDATE thread_contributions SET source_verified = 0 WHERE id = ?").bind(song.id).run();
+    await env.DB.prepare("UPDATE links SET apple_url = ? WHERE slug = ?").bind(`https://music.apple.com/gb/song/${apple.id}`, song.linkSlug).run();
+    await expect(store.manage(authorization, { kind: "identify", id: song.id, identity: apple, requestKey: "legacy", expectedRevision: 1 }))
+      .rejects.toMatchObject({ code: "unverified_source" });
+    for (const provider of ["apple", "spotify"] as const) {
+      expect((await store.getDesiredState(view.publicCapability, provider))!.entries[0]!.identity)
+        .toEqual({ status: "unresolved", reason: "legacy_source_not_verified" });
+    }
+  });
+
+  it("serializes concurrent confirmations and returns one receipt for identical retries", async () => {
+    const { view, authorization } = await setup();
+    await add(view.publicCapability, 0);
+    const id = (await store.get(view.publicCapability))!.contributions[0]!.id;
+    const request = { kind: "identify" as const, id, identity: apple, requestKey: "identify", expectedRevision: 1 };
+    const results = await Promise.all([store.manage(authorization, request), store.manage(authorization, request)]);
+    expect(results.map(result => result.revision)).toEqual([2, 2]);
+    expect((await store.get(view.publicCapability))!.revision).toBe(2);
+    const row = await env.DB.prepare("SELECT COUNT(*) AS count FROM thread_identities WHERE contribution_id = ?").bind(id).first();
+    expect(row).toEqual({ count: 1 });
+  });
+
+  it("accepts only one competing counterpart and rejects the stale identity", async () => {
+    const { view, authorization } = await setup();
+    await add(view.publicCapability, 0);
+    const id = (await store.get(view.publicCapability))!.contributions[0]!.id;
+    const identities = [apple, { ...apple, id: "999" }];
+    const results = await Promise.allSettled(identities.map((identity, index) => store.manage(authorization,
+      { kind: "identify", id, identity, requestKey: `identify-${index}`, expectedRevision: 1 })));
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.find(result => result.status === "rejected")).toMatchObject({ reason: { code: "stale_revision" } });
+    const winner = results.findIndex(result => result.status === "fulfilled");
+    const current = (await store.get(view.publicCapability))!;
+    expect(current.revision).toBe(2);
+    expect(current.contributions[0]!.counterpart).toEqual({ ...identities[winner], confirmed: true });
+  });
+
+  it("rolls back identity revision and receipt when the identity write fails", async () => {
+    const { view, authorization } = await setup();
+    await add(view.publicCapability, 0);
+    const id = (await store.get(view.publicCapability))!.contributions[0]!.id;
+    const request = { kind: "identify" as const, id, identity: apple, requestKey: "identify", expectedRevision: 1 };
+    await env.DB.exec("CREATE TRIGGER test_reject_identity BEFORE INSERT ON thread_identities BEGIN SELECT RAISE(ABORT, 'test failure'); END");
+    try {
+      await expect(store.manage(authorization, request)).rejects.toThrow();
+      const current = (await store.get(view.publicCapability))!;
+      expect(current.revision).toBe(1);
+      expect(current.contributions[0]).not.toHaveProperty("counterpart");
+    } finally {
+      await env.DB.exec("DROP TRIGGER test_reject_identity");
+    }
+    expect(await store.manage(authorization, request)).toEqual({ revision: 2, replayed: false });
+  });
+
+  it("enforces immutable opposite-provider identities and verified active sources in D1", async () => {
+    const { view, authorization } = await setup();
+    await add(view.publicCapability, 0);
+    const id = (await store.get(view.publicCapability))!.contributions[0]!.id;
+    const insert = (provider: string, catalogId: string, storefront: string) => env.DB.prepare(
+      "INSERT INTO thread_identities(contribution_id, provider, catalog_id, storefront) VALUES (?, ?, ?, ?)",
+    ).bind(id, provider, catalogId, storefront).run();
+    await expect(insert("spotify", spotify.id, "us")).rejects.toThrow();
+    await expect(insert("apple", "invalid", "gb")).rejects.toThrow();
+    await env.DB.prepare("UPDATE thread_contributions SET source_verified = 0 WHERE id = ?").bind(id).run();
+    await expect(insert("apple", apple.id, "gb")).rejects.toThrow();
+    await env.DB.prepare("UPDATE thread_contributions SET source_verified = 1 WHERE id = ?").bind(id).run();
+    await store.manage(authorization, { kind: "identify", id, identity: apple, requestKey: "identify", expectedRevision: 1 });
+    await expect(env.DB.prepare("UPDATE thread_identities SET catalog_id = '999' WHERE contribution_id = ?").bind(id).run()).rejects.toThrow();
+    await expect(env.DB.prepare("DELETE FROM thread_identities WHERE contribution_id = ?").bind(id).run()).rejects.toThrow();
+    await expect(env.DB.prepare("UPDATE thread_contributions SET source_provider = 'apple' WHERE id = ?").bind(id).run()).rejects.toThrow();
+    await expect(env.DB.prepare("UPDATE thread_contributions SET source_verified = 0 WHERE id = ?").bind(id).run()).rejects.toThrow();
   });
 });
 
