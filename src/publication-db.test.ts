@@ -51,3 +51,23 @@ it("accepts only provider playlist links and exact Spotify destination IDs", asy
   }
   expect(isPlaylistUrl("spotify", "a".repeat(22), `https://open.spotify.com/playlist/${"b".repeat(22)}`)).toBe(false);
 });
+
+it("lets a manager retry a closed Thread publication without bypassing a provider retry deadline", async () => {
+  const threads = new D1ThreadStore(env.DB);
+  const publications = new D1PublicationStore(env.DB);
+  const secret = nanoid(22);
+  const view = await threads.create("Retry", secret);
+  const auth = (await authorizeManagementCapability(threads, view.publicCapability, secret))!;
+  await threads.manage(auth, { kind: "connect", provider: "spotify", expectedRevision: 0, requestKey: "connect" });
+  await threads.manage(auth, { kind: "close", expectedRevision: 1, requestKey: "close" });
+  const [target] = await publications.due(view.publicCapability);
+  const retryAt = Date.now() + 60000;
+  await publications.failed(target!.publisherKey, 2, "rate_limited", false, retryAt);
+  await expect(publications.retry({ publicCapability: view.publicCapability } as never, "spotify")).rejects.toThrow();
+  await publications.retry(auth, "spotify");
+  expect(await publications.due(view.publicCapability)).toEqual([]);
+  const current = (await threads.get(view.publicCapability))!;
+  expect(current.revision).toBe(2);
+  expect(current.publications.find(p => p.provider === "spotify")!.status).toBe("pending");
+  expect((await publications.target(target!.publisherKey))!.nextAttemptAt).toBe(retryAt);
+});

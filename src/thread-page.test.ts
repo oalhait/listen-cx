@@ -89,3 +89,20 @@ it("links only verified provider playlists and explains when the link has older 
   expect(threadPage({ ...view, publications: [{ ...spotify, appliedRevision: null }] }, false)).not.toContain("Listen on Spotify");
   expect(threadPage({ ...view, publications: [{ ...spotify, connected: false }] }, false)).not.toContain("Listen on Spotify");
 });
+
+it("offers explicit counterpart confirmation to managers when a connected app is missing a match", () => {
+  const connected = { ...view, publications: view.publications.map(p => ({ ...p, connected: true })) };
+  const page = threadPage(connected, true);
+  expect(page).toContain('data-identify="1"');
+  expect(page).toContain("same recording");
+  expect(page).toContain('type="checkbox"');
+  expect(page).not.toContain('data-remove="1"');
+  expect(threadPage(connected, false)).not.toContain('data-identify=');
+  expect(threadPage({ ...connected, contributions: connected.contributions.map(s => ({ ...s, counterpart: { provider: "apple" as const, id: "123", storefront: "us", confirmed: true as const } })) }, true)).not.toContain('data-identify=');
+});
+
+it("keeps sync retry available to a manager after closure", () => {
+  const closed = { ...view, closedAt: "now", publications: view.publications.map(p => ({ ...p, connected: true, status: "failed" as const })) };
+  expect(threadPage(closed, true, ["apple"])).toContain('data-retry-sync="apple"');
+  expect(threadPage(closed, false, ["apple"])).not.toContain('data-retry-sync=');
+});

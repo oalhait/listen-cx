@@ -4,7 +4,7 @@ import type { Resolver } from "./resolve.js";
 import type { D1ThreadStore } from "./thread-db.js";
 import { parseTrackUrl, type Provider } from "./urls.js";
 import { ThreadError, mutationFingerprint, verifiedSource, type ManagementIntent, type MutationRequest } from "./thread.js";
-import { authorizeManagementCapability, isSameOriginAction, managementCookie, setManagementCookie, THREAD_SECURITY_HEADERS } from "./thread-security.js";
+import { authorizeManagementCapability, isSameOriginAction, managementCookie, setManagementCookie, THREAD_SECURITY_HEADERS, type ManagementAuthorization } from "./thread-security.js";
 import { threadCreationPage, threadPage } from "./thread-page.js";
 
 async function bodyFields(c: Context, fields: string[]): Promise<Record<string, unknown>> {
@@ -26,6 +26,7 @@ function requestFields(body: Record<string, unknown>): MutationRequest {
 export interface ThreadPublishing {
   availableProviders: Provider[];
   onChange: (capability: string) => void;
+  retry?: (authorization: ManagementAuthorization, provider: Provider) => Promise<void>;
 }
 
 export function createThreadApp({ resolver, store, baseUrl, publishing }: { resolver: Pick<Resolver, "resolve">; store: D1ThreadStore; baseUrl: string; publishing?: ThreadPublishing }) {
@@ -99,6 +100,43 @@ export function createThreadApp({ resolver, store, baseUrl, publishing }: { reso
     }
     setManagementCookie(c, capability, secret);
     return c.json({ managed: true });
+  });
+  app.post("/t/:capability/manage/retry", async c => {
+    const capability = c.req.param("capability");
+    const authorized = await authorization(c, capability);
+    if (!authorized) throw new ThreadError(403, "forbidden", "Open the private management link to retry sync.");
+    const body = await bodyFields(c, ["provider", "requestKey", "expectedRevision"]);
+    if ((body.provider !== "spotify" && body.provider !== "apple") || !publishing?.retry || !publishing.availableProviders.includes(body.provider)) {
+      throw new ThreadError(503, "publisher_unavailable", "This music app is not available for publishing yet.");
+    }
+    await publishing.retry(authorized, body.provider);
+    publishing.onChange(capability);
+    return c.json({ thread: await view(capability) });
+  });
+  app.post("/t/:capability/manage/identify", async c => {
+    const capability = c.req.param("capability");
+    const authorized = await authorization(c, capability);
+    if (!authorized) throw new ThreadError(403, "forbidden", "Open the private management link to confirm a song match.");
+    const body = await bodyFields(c, ["id", "url", "confirmed", "requestKey", "expectedRevision"]);
+    const request = requestFields(body);
+    const identity = typeof body.url === "string" ? parseTrackUrl(body.url) : null;
+    if (!Number.isSafeInteger(body.id) || Number(body.id) < 1 || !identity || typeof body.url !== "string" || body.confirmed !== true) {
+      throw new ThreadError(400, "invalid_counterpart", "Choose a direct track link and confirm it is the same recording.");
+    }
+    const intent = { kind: "identify" as const, id: Number(body.id), identity };
+    const replay = await store.preflight(capability, request.requestKey, await mutationFingerprint(intent), request.expectedRevision);
+    if (replay) {
+      publishing?.onChange(capability);
+      return c.json({ receipt: replay, thread: await view(capability) });
+    }
+    let track;
+    try { track = await resolver.resolve(body.url); }
+    catch { throw new ThreadError(502, "provider_unavailable", "The music app is unavailable. Try again."); }
+    if (!track) throw new ThreadError(404, "track_not_found", "Track not found. Try another track link.");
+    verifiedSource(body.url, track);
+    const receipt = await store.manage(authorized, { ...request, ...intent });
+    publishing?.onChange(capability);
+    return c.json({ receipt, thread: await view(capability) });
   });
   app.post("/t/:capability/manage/mutate", async c => {
     const capability = c.req.param("capability");

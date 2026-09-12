@@ -1,4 +1,6 @@
 import type { Provider } from "./urls.js";
+import { isManagementAuthorization, type ManagementAuthorization } from "./thread-security.js";
+import { ThreadError } from "./thread.js";
 
 export interface PublicationTarget {
   publisherKey: string;
@@ -19,6 +21,15 @@ export function isPlaylistUrl(provider: Provider, id: string, value: string): bo
 
 export class D1PublicationStore {
   constructor(private readonly db: D1Database) {}
+
+  async retry(authorization: ManagementAuthorization, provider: Provider): Promise<void> {
+    if (!isManagementAuthorization(authorization)) throw new ThreadError(403, "forbidden", "Management access required.");
+    await this.db.withSession("first-primary").prepare(`UPDATE thread_publications SET status = 'pending',
+      blocked_reason = NULL, failure_code = NULL
+      WHERE provider = ? AND connected = 1 AND status != 'synced'
+      AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
+      .bind(provider, authorization.publicCapability).run();
+  }
 
   async due(capability?: string): Promise<PublicationTarget[]> {
     const result = await this.db.withSession("first-primary").prepare(`SELECT p.publisher_key AS publisherKey,

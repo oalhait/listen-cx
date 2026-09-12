@@ -146,3 +146,38 @@ it("connects available providers only with management access and honors Apple ed
   expect((await post(`/t/${cap}/manage/mutate`, { kind: "connect", provider: "spotify", expectedRevision: 2, requestKey: "spotify" }, cookie)).status).toBe(503);
   expect((await threadStore.get(cap))!.revision).toBe(2);
 });
+
+it("confirms an explicitly chosen counterpart only for a manager and replays without re-resolving", async () => {
+  const { cap, cookie } = await create();
+  await add(cap, 0);
+  const id = (await threadStore.get(cap))!.contributions[0]!.id;
+  const path = `/t/${cap}/manage/identify`;
+  const body = { id, url: "https://music.apple.com/us/song/123", confirmed: true, expectedRevision: 1, requestKey: "match" };
+  resolve.mockClear().mockResolvedValue({ ...track, spotifyUrl: null, appleUrl: body.url });
+  expect((await post(path, body)).status).toBe(403);
+  expect((await post(path, { ...body, confirmed: false }, cookie)).status).toBe(400);
+  expect(resolve).not.toHaveBeenCalled();
+  expect((await post(path, body, cookie)).status).toBe(200);
+  expect((await post(path, body, cookie)).status).toBe(200);
+  expect(resolve).toHaveBeenCalledTimes(1);
+  expect((await threadStore.getDesiredState(cap, "apple"))!.entries[0]!.identity).toEqual({ status: "verified", id: "123", storefront: "us" });
+  expect((await threadStore.get(cap))!.contributions[0]!.source.provider).toBe("spotify");
+});
+
+it("keeps sync retries manager-only and allows them after a Thread closes", async () => {
+  const { D1PublicationStore } = await import("./publication-db.js");
+  const publications = new D1PublicationStore(env.DB);
+  const enabled = createApp({ resolver: { resolve }, store: new D1LinkStore(env.DB), threadStore, baseUrl,
+    publishing: { availableProviders: ["spotify"], onChange: vi.fn(), retry: (auth, provider) => publications.retry(auth, provider) } });
+  const { cap, cookie } = await create();
+  const request = (path: string, body: unknown, auth?: string) => enabled.request(baseUrl + path, {
+    method: "POST", headers: { Origin: baseUrl, "Content-Type": "application/json", "X-Listen-Action": "thread", ...(auth ? { Cookie: auth } : {}) }, body: JSON.stringify(body),
+  });
+  await request(`/t/${cap}/manage/mutate`, { kind: "connect", provider: "spotify", expectedRevision: 0, requestKey: "connect" }, cookie);
+  await request(`/t/${cap}/manage/mutate`, { kind: "close", expectedRevision: 1, requestKey: "close" }, cookie);
+  const path = `/t/${cap}/manage/retry`;
+  expect((await request(path, { provider: "spotify" })).status).toBe(403);
+  expect((await request(path, { provider: "spotify" }, cookie)).status).toBe(200);
+  expect((await request(path, { provider: "spotify" }, cookie)).status).toBe(200);
+  expect((await threadStore.get(cap))!.revision).toBe(2);
+});
