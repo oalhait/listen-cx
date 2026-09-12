@@ -1,4 +1,4 @@
-export type Desired = { playlistKey: string; revision: number; trackIds: string[] };
+export type Desired = { playlistKey: string; revision: number; trackIds: string[]; title?: string };
 export type Destination = {
   desired: Desired;
   providerPlaylistId: string | null;
@@ -40,13 +40,15 @@ export function validateDesired(input: unknown): asserts input is Desired {
   if (!input || typeof input !== "object") throw new PublishingError("invalid_desired", 400);
   const value = input as Desired;
   if (typeof value.playlistKey !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(value.playlistKey)
-    || !Number.isSafeInteger(value.revision) || value.revision < 1
+    || !Number.isSafeInteger(value.revision) || value.revision < 0
+    || (value.title !== undefined && (typeof value.title !== "string" || !value.title.trim() || [...value.title].length > 80 || /\p{Cc}/u.test(value.title)))
     || !Array.isArray(value.trackIds) || value.trackIds.length > 1000
     || value.trackIds.some(id => typeof id !== "string" || !/^[A-Za-z0-9]{22}$/.test(id))) {
     throw new PublishingError("invalid_desired", 400);
   }
 }
 
+const playlistName = (desired: Desired) => desired.title ?? "listen.cx Thread";
 const equal = (left: string[], right: string[]) => left.length === right.length && left.every((id, index) => id === right[index]);
 
 export class SpotifyPublisher {
@@ -76,13 +78,13 @@ export class SpotifyPublisher {
     try {
       const existing = await this.options.store.get(desired.playlistKey);
       if (existing && desired.revision < existing.desired.revision) throw new PublishingError("stale_revision");
-      if (existing && desired.revision === existing.desired.revision && !equal(desired.trackIds, existing.desired.trackIds)) {
+      if (existing && desired.revision === existing.desired.revision && (!equal(desired.trackIds, existing.desired.trackIds) || playlistName(desired) !== playlistName(existing.desired))) {
         throw new PublishingError("revision_conflict");
       }
       if (existing?.appliedRevision === desired.revision) return existing;
       const row: Destination = existing ?? {
         desired, providerPlaylistId: null, appliedRevision: null, publisherId: null,
-        marker: `listen.cx Spotify publishing spike ${crypto.randomUUID()}`,
+        marker: `listen.cx Spotify publishing ${crypto.randomUUID()}`,
         createUnresolved: false, retryNotBefore: 0,
       };
       if (row.createUnresolved) throw new PublishingError("create_unresolved");
@@ -102,7 +104,7 @@ export class SpotifyPublisher {
           let created;
           try {
             created = await this.request("/me/playlists", "POST", {
-              name: `listen.cx SPIKE ${desired.playlistKey}`, public: true, collaborative: false, description: row.marker,
+              name: playlistName(desired), public: true, collaborative: false, description: row.marker,
             });
           } catch (error) {
             if (error instanceof PublishingError && error.code === "provider_error" && error.status >= 400 && error.status < 500 && error.status !== 408) {

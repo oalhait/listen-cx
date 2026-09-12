@@ -47,11 +47,50 @@ function fixture() {
 }
 
 describe("Spotify publisher contract", () => {
+  it("creates an empty revision-zero Thread using its title and a non-spike ownership marker", async () => {
+    const f = fixture();
+    await expect(f.publisher.reconcile({ ...desired(0, []), title: "Late night drives" })).resolves.toMatchObject({ appliedRevision: 0 });
+    expect(f.calls.find(call => call.path === "/me/playlists")?.body.name).toBe("Late night drives");
+    expect(f.rows.get("acceptance")?.marker).toMatch(/^listen\.cx Spotify publishing [a-f0-9-]+$/);
+    await expect(f.publisher.observe("acceptance")).resolves.toMatchObject({ revision: 0, appliedRevision: 0, trackUris: [], matchesDesired: true });
+  });
+
+  it("uses the default Thread name for existing spike callers without a title", async () => {
+    const f = fixture();
+    await f.publisher.reconcile(desired());
+    expect(f.calls.find(call => call.path === "/me/playlists")?.body.name).toBe("listen.cx Thread");
+  });
+
+  it("rejects conflicting titles at the same revision before trusting an applied revision", async () => {
+    const f = fixture();
+    await f.publisher.reconcile({ ...desired(), title: "Road trip" });
+    f.calls.length = 0;
+    await expect(f.publisher.reconcile({ ...desired(), title: "Other trip" })).rejects.toMatchObject({ code: "revision_conflict" });
+    await expect(f.publisher.reconcile(desired())).rejects.toMatchObject({ code: "revision_conflict" });
+    expect(f.calls).toHaveLength(0);
+  });
+
+  it("treats an omitted and explicit default title as the same desired state", async () => {
+    const f = fixture();
+    await f.publisher.reconcile(desired());
+    f.calls.length = 0;
+    await expect(f.publisher.reconcile({ ...desired(), title: "listen.cx Thread" })).resolves.toMatchObject({ appliedRevision: 1 });
+    expect(f.calls).toHaveLength(0);
+  });
+
+  it.each([null, 42, "", " ", "x".repeat(81), "line\nbreak"])("rejects invalid titles before provider requests: %j", async title => {
+    const f = fixture();
+    await expect(f.publisher.reconcile({ ...desired(), title })).rejects.toMatchObject({ code: "invalid_desired" });
+    expect(f.calls).toHaveLength(0);
+  });
+
   it("reads current provider contents without rewriting drift or trusting an applied revision", async () => {
     const f = fixture();
     await f.publisher.reconcile(desired());
     f.tracks().splice(0, 3, `spotify:track:${D}`);
     f.calls.length = 0;
+    await f.publisher.reconcile(desired());
+    expect(f.calls).toHaveLength(0);
     const observed = await f.publisher.observe("acceptance");
     expect(observed).toMatchObject({ providerPlaylistId: playlistId, publisherId: "publisher", appliedRevision: 1, revision: 1, trackUris: [`spotify:track:${D}`], matchesDesired: false, snapshotId: "1", observedAt: 1000 });
     expect(f.calls.every(call => call.method === "GET")).toBe(true);
@@ -78,7 +117,7 @@ describe("Spotify publisher contract", () => {
     expect(f.calls[0]!.method).toBe("GET");
     expect(f.rows.get("acceptance")?.appliedRevision).toBe(1);
   });
-  it("creates one public spike playlist and verifies [A,B,C] then [C,A,D] at the same ID", async () => {
+  it("creates one public Thread playlist and verifies [A,B,C] then [C,A,D] at the same ID", async () => {
     const f = fixture();
     expect(await f.publisher.reconcile(desired())).toMatchObject({ providerPlaylistId: playlistId, appliedRevision: 1 });
     expect(await f.publisher.reconcile(desired(2, [C, A, D]))).toMatchObject({ providerPlaylistId: playlistId, appliedRevision: 2 });
@@ -196,7 +235,7 @@ describe("Spotify publisher contract", () => {
     expect(f.calls.filter(c => c.method !== "GET")).toHaveLength(writes);
   });
 
-  it("recovers an unknown create only by verifying the publisher and saved spike marker", async () => {
+  it("recovers an unknown create only by verifying the publisher and saved ownership marker", async () => {
     const f = fixture();
     f.faults.push(path => { if (path === "/me/playlists") throw new Error("response lost"); return undefined; });
     await expect(f.publisher.reconcile(desired())).rejects.toBeDefined();
@@ -228,7 +267,7 @@ describe("Spotify publisher contract", () => {
     await f.publisher.reconcile(desired());
   });
 
-  it.each([0, -1, 1.5])("rejects invalid revision %s before provider requests", async revision => {
+  it.each([-1, 1.5])("rejects invalid revision %s before provider requests", async revision => {
     const f = fixture(); await expect(f.publisher.reconcile(desired(revision))).rejects.toMatchObject({ code: "invalid_desired" });
     expect(f.calls).toHaveLength(0);
   });
