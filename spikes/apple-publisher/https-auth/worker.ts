@@ -7,7 +7,8 @@ export interface ProbeEnvironment {
 }
 
 const probeOrigin = 'https://listen-cx-apple-auth-spike-dev.omar-alhait.workers.dev';
-const assetPaths = new Set(['/', '/probe.mjs', '/web-authorization.mjs', '/control', '/control.mjs', '/message-diagnostic.mjs', '/credential-pairing.mjs']);
+const authorizationPaths = new Set(['/', '/control', '/same-id']);
+const assetPaths = new Set([...authorizationPaths, '/probe.mjs', '/web-authorization.mjs', '/control.mjs', '/message-diagnostic.mjs', '/credential-pairing.mjs', '/same-id-control.mjs', '/same-id.mjs']);
 const headers = {
   'Cache-Control': 'no-store',
   'Referrer-Policy': 'no-referrer',
@@ -32,7 +33,7 @@ export default {
     if (url.origin !== probeOrigin) return json({ error: 'wrong_origin' }, 404);
     const requestOrigin = request.headers.get('Origin');
     const fetchSite = request.headers.get('Sec-Fetch-Site');
-    const authorizationPage = ['/', '/control'].includes(url.pathname);
+    const authorizationPage = authorizationPaths.has(url.pathname);
     const landingNavigation = request.method === 'GET' && authorizationPage && request.headers.get('Sec-Fetch-Mode') === 'navigate' && request.headers.get('Sec-Fetch-Dest') === 'document';
     if (!landingNavigation && ((requestOrigin && requestOrigin !== probeOrigin) || (fetchSite && !['none', 'same-origin'].includes(fetchSite)))) return json({ error: 'wrong_origin' }, 403);
     if (request.method === 'GET' && assetPaths.has(url.pathname)) {

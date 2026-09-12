@@ -49,7 +49,7 @@ describe('isolated HTTPS Apple authorization probe', () => {
   });
 
   it('shares only the origin from authorization pages so Apple can establish its callback channel', async () => {
-    for (const path of ['/', '/control']) {
+    for (const path of ['/', '/control', '/same-id']) {
       const page = await SELF.fetch(`${origin}${path}`);
       expect(page.status).toBe(200);
       expect(page.headers.get('Referrer-Policy')).toBe('strict-origin');
@@ -77,6 +77,18 @@ describe('isolated HTTPS Apple authorization probe', () => {
     expect((await SELF.fetch(`${origin}/message-diagnostic.mjs`)).status).toBe(200);
     expect((await SELF.fetch(`${origin}/credential-pairing.mjs`)).status).toBe(200);
     expect((await SELF.fetch(`${origin}/control`, { method: 'POST' })).status).toBe(404);
+  });
+
+  it('serves the same-ID proof without embedding credentials or exposing a write API', async () => {
+    const page = await SELF.fetch(`${origin}/same-id`, { headers: { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document' } });
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain('same-ID mutation proof');
+    for (const path of ['/same-id-control.mjs', '/same-id.mjs']) {
+      const response = await SELF.fetch(`${origin}${path}`);
+      expect(response.status).toBe(200);
+      expect(await response.text()).not.toContain(env.DEVELOPER_TOKEN);
+    }
+    expect((await SELF.fetch(`${origin}/same-id/journal`, { method: 'POST', headers, body: '{}' })).status).toBe(404);
   });
 
   it('fails closed outside dev or after the developer token expires', async () => {

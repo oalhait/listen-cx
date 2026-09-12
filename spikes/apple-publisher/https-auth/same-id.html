@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Apple Music same-ID mutation proof</title></head>
+<body>
+<h1>Apple Music same-ID mutation proof</h1>
+<p>This isolated test creates one clearly named disposable playlist and preserves its ID through four separately initiated operations.</p>
+<ol><li>Create A–B–C</li><li>Append D → A–B–C–D</li><li>Remove B → A–C–D</li><li>Reorder → D–C–A</li></ol>
+<p>Each write is fenced in browser storage before Apple is called and completes only after full ordered readback. Existing playlists are never changed or deleted.</p>
+<button id="authorize" disabled>Authorize Apple Music</button>
+<button id="create" disabled>Create disposable A–B–C</button>
+<button id="append" disabled>Append D</button>
+<button id="remove" disabled>Remove B on the same ID</button>
+<button id="reorder" disabled>Reorder to D–C–A on the same ID</button>
+<button id="reconcile" disabled>Read and reconcile an uncertain write</button>
+<button id="read" disabled>Read current Apple playlist</button>
+<pre id="status">Loading MusicKit…</pre>
+<h2>Safe experiment state</h2>
+<pre id="state">No provider operation has been reserved.</pre>
+<script type="module" src="/same-id-control.mjs"></script>
+</body></html>
