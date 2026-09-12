@@ -49,7 +49,7 @@ describe('isolated HTTPS Apple authorization probe', () => {
   });
 
   it('shares only the origin from authorization pages so Apple can establish its callback channel', async () => {
-    for (const path of ['/', '/control', '/same-id']) {
+    for (const path of ['/', '/control', '/same-id', '/replacement-sdk', '/replacement-direct']) {
       const page = await SELF.fetch(`${origin}${path}`);
       expect(page.status).toBe(200);
       expect(page.headers.get('Referrer-Policy')).toBe('strict-origin');
@@ -89,6 +89,22 @@ describe('isolated HTTPS Apple authorization probe', () => {
       expect(await response.text()).not.toContain(env.DEVELOPER_TOKEN);
     }
     expect((await SELF.fetch(`${origin}/same-id/journal`, { method: 'POST', headers, body: '{}' })).status).toBe(404);
+  });
+
+  it('serves separate fresh replacement pages and their passive observer without credentials', async () => {
+    for (const path of ['/replacement-sdk', '/replacement-direct']) {
+      const page = await SELF.fetch(`${origin}${path}`, { headers: { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document' } });
+      expect(page.status).toBe(200);
+      expect(await page.text()).toContain('fresh replacement proof');
+    }
+    for (const path of ['/replacement-control.mjs', '/replacement-proof.mjs', '/transport-observer.mjs']) {
+      const response = await SELF.fetch(`${origin}${path}`);
+      expect(response.status).toBe(200);
+      const source = await response.text();
+      expect(source).not.toContain(env.DEVELOPER_TOKEN);
+      expect(source).not.toContain('private-user-token');
+    }
+    expect((await SELF.fetch(`${origin}/replacement-sdk/journal`, { method: 'POST', headers, body: '{}' })).status).toBe(404);
   });
 
   it('fails closed outside dev or after the developer token expires', async () => {

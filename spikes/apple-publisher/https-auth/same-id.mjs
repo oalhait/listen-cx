@@ -73,6 +73,7 @@ export async function readFullPlaylist(request, id) {
     id,
     entries,
     metadata: {
+      canEdit: typeof playlist.attributes?.canEdit === 'boolean' ? playlist.attributes.canEdit : null,
       isPublic: typeof playlist.attributes?.isPublic === 'boolean' ? playlist.attributes.isPublic : null,
       hasCatalog: typeof playlist.attributes?.hasCatalog === 'boolean' ? playlist.attributes.hasCatalog : null,
       catalogId: typeof catalog?.id === 'string' ? catalog.id : null,

@@ -22,13 +22,14 @@ test('reads every tracks page and preserves provider order and metadata', async 
   const calls = [];
   const result = await readFullPlaylist(async path => {
     calls.push(path);
-    if (path.includes('?include=')) return { data: [{ id: 'p.same', attributes: { isPublic: true, hasCatalog: true }, relationships: { catalog: { data: [{ id: 'pl.shared', attributes: { url: 'https://music.apple.com/us/playlist/test/pl.shared' } }] } } }] };
+    if (path.includes('?include=')) return { data: [{ id: 'p.same', attributes: { canEdit: true, isPublic: true, hasCatalog: true }, relationships: { catalog: { data: [{ id: 'pl.shared', attributes: { url: 'https://music.apple.com/us/playlist/test/pl.shared' } }] } } }] };
     if (path.includes('offset=2')) return { data: tracks('C', 'D') };
     return { data: tracks('A', 'B'), next: '/v1/me/library/playlists/p.same/tracks?offset=2' };
   }, 'p.same');
   assert.deepEqual(result.entries.map(entry => entry.catalogId), ['A', 'B', 'C', 'D']);
   assert.deepEqual(result.entries.map(entry => entry.libraryId), ['i.A', 'i.B', 'i.C', 'i.D']);
   assert.equal(result.metadata.isPublic, true);
+  assert.equal(result.metadata.canEdit, true);
   assert.equal(result.metadata.catalogId, 'pl.shared');
   assert.equal(result.metadata.url, 'https://music.apple.com/us/playlist/test/pl.shared');
   assert.equal(calls.length, 3);

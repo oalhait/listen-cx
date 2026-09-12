@@ -7,8 +7,8 @@ export interface ProbeEnvironment {
 }
 
 const probeOrigin = 'https://listen-cx-apple-auth-spike-dev.omar-alhait.workers.dev';
-const authorizationPaths = new Set(['/', '/control', '/same-id']);
-const assetPaths = new Set([...authorizationPaths, '/probe.mjs', '/web-authorization.mjs', '/control.mjs', '/message-diagnostic.mjs', '/credential-pairing.mjs', '/same-id-control.mjs', '/same-id.mjs']);
+const authorizationPaths = new Set(['/', '/control', '/same-id', '/replacement-sdk', '/replacement-direct']);
+const assetPaths = new Set([...authorizationPaths, '/probe.mjs', '/web-authorization.mjs', '/control.mjs', '/message-diagnostic.mjs', '/credential-pairing.mjs', '/same-id-control.mjs', '/same-id.mjs', '/replacement-control.mjs', '/replacement-proof.mjs', '/transport-observer.mjs']);
 const headers = {
   'Cache-Control': 'no-store',
   'Referrer-Policy': 'no-referrer',

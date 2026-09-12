@@ -6,10 +6,10 @@ const origin = 'https://listen-cx-apple-auth-spike-dev.omar-alhait.workers.dev';
 const invitation = await readFile(new URL('../.local/https-invitation.html', import.meta.url), 'utf8');
 const invite = invitation.match(/#invite=([a-f0-9]{64})/)?.[1];
 assert.ok(invite, 'Private test invitation is missing');
-const mode = invitation.includes(`${origin}/same-id#invite=`) ? 'same-id' : invitation.includes(`${origin}/control#invite=`) ? 'direct-sdk' : 'observed-popup';
+const mode = invitation.includes(`${origin}/replacement-sdk#invite=`) ? 'replacement-sdk' : invitation.includes(`${origin}/replacement-direct#invite=`) ? 'replacement-direct' : invitation.includes(`${origin}/same-id#invite=`) ? 'same-id' : invitation.includes(`${origin}/control#invite=`) ? 'direct-sdk' : 'observed-popup';
 const headers = { Origin: origin, 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' };
 const landing = await new Promise((resolve, reject) => {
-  get(`${origin}${mode === 'same-id' ? '/same-id' : mode === 'direct-sdk' ? '/control' : '/'}`, { headers: { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document' } }, response => {
+  get(`${origin}${mode.startsWith('replacement-') ? `/${mode}` : mode === 'same-id' ? '/same-id' : mode === 'direct-sdk' ? '/control' : '/'}`, { headers: { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document' } }, response => {
     response.resume();
     resolve({ status: response.statusCode, referrerPolicy: response.headers['referrer-policy'] });
   }).on('error', reject);
@@ -25,7 +25,9 @@ assert.ok(cookie, 'Protected test cookie is missing');
 const token = await fetch(`${origin}/developer-token`, { headers: { ...headers, Cookie: cookie } });
 assert.equal(token.headers.get('Referrer-Policy'), 'no-referrer');
 if (mode !== 'observed-popup') {
-  const assets = mode === 'same-id'
+  const assets = mode.startsWith('replacement-')
+    ? [{ remotePath: `/${mode}`, source: 'replacement.html' }, { remotePath: '/replacement-control.mjs', source: 'replacement-control.mjs' }, { remotePath: '/replacement-proof.mjs', source: 'replacement-proof.mjs' }, { remotePath: '/transport-observer.mjs', source: 'transport-observer.mjs' }, { remotePath: '/same-id.mjs', source: 'same-id.mjs' }, { remotePath: '/web-authorization.mjs', source: '../web-authorization.mjs' }]
+    : mode === 'same-id'
     ? [{ remotePath: '/same-id', source: 'same-id.html' }, { remotePath: '/same-id-control.mjs', source: 'same-id-control.mjs' }, { remotePath: '/same-id.mjs', source: 'same-id.mjs' }, { remotePath: '/web-authorization.mjs', source: '../web-authorization.mjs' }]
     : [{ remotePath: '/control', source: 'control.html' }, { remotePath: '/control.mjs', source: 'control.mjs' }, { remotePath: '/message-diagnostic.mjs', source: 'message-diagnostic.mjs' }, { remotePath: '/credential-pairing.mjs', source: 'credential-pairing.mjs' }, { remotePath: '/web-authorization.mjs', source: '../web-authorization.mjs' }];
   await Promise.all(assets.map(async ({ remotePath, source }) => {

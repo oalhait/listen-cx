@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Apple Music fresh replacement proof</title></head>
+<body>
+<h1>Apple Music fresh replacement proof</h1>
+<p>This isolated test creates one new disposable A–B–C playlist, records its editable and sharing metadata, then performs one replacement to C–A on that same ID.</p>
+<p>The SDK and direct fallback paths use separate destinations and durable journals. The direct path stays locked unless the SDK path exposed no response and exact readback remained A–B–C.</p>
+<button id="authorize" disabled>Authorize Apple Music</button>
+<button id="run" disabled>Run the authorized fresh experiment</button>
+<button id="create" disabled>Create fresh disposable A–B–C</button>
+<button id="replace" disabled>Replace once with C–A</button>
+<button id="read" disabled>Read current Apple playlist</button>
+<pre id="status">Loading MusicKit…</pre>
+<h2>Safe experiment state</h2>
+<pre id="state">No provider operation has been reserved.</pre>
+<script type="module" src="/replacement-control.mjs"></script>
+</body></html>
