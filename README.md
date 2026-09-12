@@ -6,15 +6,10 @@ shareable URL with its real title, artist, and artwork. Albums and `spotify.link
 short URLs are not supported. Apple album URLs must include a track's `?i=` ID.
 
 The recipient page opens the original provider URL and offers a clearly labeled
-search on the other app. The public web app still labels cross-platform Jams as
-coming soon. An experimental local-only MCP can create real ordered shared Jam
-queues; it does not provide synchronized multi-user playback. No app preference
-is saved.
-
-Run `pnpm dev` and open the printed local URL. Database migrations are required
-for link and Jam creation.
-
-Threads collect ordered songs collaboratively; provider playlist sync remains unavailable.
+search on the other app. No app preference is saved. Threads collect ordered songs
+collaboratively, with a publishing integration for shared Spotify and Apple Music
+accounts. Publishing is disabled pending product-runtime verification; Apple
+Music’s unattended server token transport is still unverified.
 
 ## Run locally
 
@@ -130,12 +125,16 @@ authorize their account.
 
 Open `/threads/new` to create an ordered, collaborative collection. The website
 owns the songs and their order. Anyone with the public sharing link can read and
-add tracks; a separate private management link can reorder, remove, and close.
+add tracks; a separate private management link can connect music apps, confirm
+recording matches, reorder, remove, and close. Connecting Apple Music locks removal
+and reordering for the entire Thread; additions and closure remain available.
+Spotify-only Threads retain full editing. Connections cannot currently be removed.
 Closing freezes edits while leaving the songs readable. Other browsers see changes
 on refresh; stale edits return 409 instead of overwriting newer state.
 
 Run `pnpm migrate:local` after pulling this change, then `pnpm dev`. Migration
-`0004_thread_publication_state.sql` only adds state to the historical D1 schema.
+`0004` through `0006` add revisions, publication connections, and confirmed
+counterpart identities to the historical D1 schema.
 Existing rows, capability digests, removed contributions, and historical positions
 are preserved. Legacy Threads start at revision zero with unverified catalog
 identities. The old Thread Durable Object is not restored.
@@ -151,7 +150,9 @@ All Thread mutations require JSON, a matching `Origin`, and
 | `GET /t/:capability` | Thread page; management controls require its scoped HttpOnly cookie. |
 | `POST /api/threads/:capability/contributions` | `{url, requestKey, expectedRevision}`; resolves source metadata before committing. |
 | `POST /t/:capability/manage/activate` | Exchanges `{managementCapability}` for a Thread-scoped HttpOnly, SameSite=Strict cookie. HTTPS cookies are Secure. The browser removes the fragment before exchange. |
-| `POST /t/:capability/manage/mutate` | Manager only: `{kind, requestKey, expectedRevision}`, with `id` for `remove`, all active `ids` in desired order for `reorder`, or `kind: "close"`. |
+| `POST /t/:capability/manage/mutate` | Manager only: `{kind, requestKey, expectedRevision}`, with `id` for `remove`, all active `ids` for `reorder`, `provider` for `connect`, or `kind: "close"`. Connection requires an enabled provider. |
+| `POST /t/:capability/manage/retry` | Manager only: `{provider}` retries an enabled, connected publication without changing Thread revision or bypassing retry deadlines. Also works after closure. |
+| `POST /t/:capability/manage/identify` | Manager only: `{id, url, confirmed: true, requestKey, expectedRevision}` confirms an immutable counterpart from the other music app after source URL verification. |
 
 Mutation replies distinguish the committed receipt's revision from the current
 Thread snapshot. Replaying the same request key and intent returns its receipt
@@ -172,24 +173,58 @@ is capped at 10,000 Threads. These limits do not replace deployment abuse contro
 
 `D1ThreadStore.getDesiredState(capability, provider)` returns one consistent
 snapshot: website revision/order, every contribution, provider-specific identity
-resolution, and publication status. An identity is verified only for a newly
-resolved source track's own service. Opposite-provider and legacy identities stay
-explicitly unresolved in their original positions. `identitiesComplete` describes
-identity coverage, not permission or readiness to publish.
+resolution, and publication status. A source track establishes only its own service's
+identity. Managers may explicitly confirm a counterpart link for the same recording;
+the API verifies that the URL names a real catalog track, while the manager is
+responsible for choosing the correct recording. Confirmations are immutable.
+Legacy identities remain unresolved. Missing identities block the entire provider
+snapshot, preserving duplicates and order instead of silently omitting songs.
 
-Publication status contains `requestedRevision`, `appliedRevision`,
-`pending | blocked | failed | synced`, `blockedReason`, `failureCode`, and
-`verifiedPlaylistId`. Both providers currently start and remain blocked; applied
-revision and verified playlist ID are null. No publisher is invoked, no provider
-edits are imported into the website, and no public route accepts playlist targets,
-operator credentials, or publication reports. A future trusted publisher must
-bind its service-owned playlist and verify full provider readback before recording
-an applied revision or marking sync complete.
+Publication status includes `connected`, `requestedRevision`, `appliedRevision`,
+`pending | blocked | failed | synced`, `blockedReason`, `failureCode`, and verified
+playlist ID/URL. Connecting a provider is a revisioned, replayable management action.
+The Apple edit restriction is enforced in the same D1 transaction as revision claims.
+An old successful readback cannot mark a newer Thread revision synced.
 
-Spotify still needs a verified authorized server publisher. Full Apple sync needs
-a web-compatible create/remove/reorder route; native companion apps are outside
-this product. REST creation or appending alone does not establish full sync. The
-existing publishing spikes remain research and are not connected to Threads.
+A private `ThreadPublisher` Durable Object serializes each destination through its
+alarm. D1 publication rows act as an outbox; request completion wakes pending work,
+and a scheduled sweep recovers work missed between commit and wakeup. Provider
+markers use private random destination keys, never Thread capabilities. No public
+route accepts credentials, destination IDs, or publication reports.
+
+Spotify creates one public playlist and replaces its contents to apply additions,
+removal, and order. Apple creates one public playlist and only appends an exact
+suffix. Both require provider readback before reporting success. An ambiguous
+creation is fenced to avoid duplicate playlists. Apple recovers an uncertain append
+only when readback establishes the exact intended list; it never blindly re-appends.
+Unexpected Apple playlist edits require attention rather than replacement or removal.
+
+### Publisher configuration
+
+Both `SPOTIFY_PUBLISHING_ENABLED` and `APPLE_PUBLISHING_ENABLED` default to `false`.
+A provider's connection control appears only when its flag is `true` and all its
+credentials are present. These are shared publisher accounts; listeners do not
+supply account tokens. Existing research authorization sessions are not automatically
+imported into the product runtime.
+
+| Provider | Worker secrets |
+| --- | --- |
+| Spotify | `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REFRESH_TOKEN`, `PUBLISHER_ENCRYPTION_KEY` |
+| Apple Music | `APPLE_DEVELOPER_TOKEN`, `APPLE_MUSIC_USER_TOKEN` |
+
+The Spotify encryption key is base64 encoding of 32 random bytes. Refreshed tokens
+are encrypted in a dedicated private credential object, and rotated refresh tokens
+are persisted before use. Preserve that encryption key while its stored credentials
+are in use. Replacing the configured OAuth seed makes the runtime refresh that seed.
+Use Worker secrets in deployed environments and ignored `.dev.vars` locally; never
+put tokens in URLs, committed configuration, or Thread responses.
+
+Provider activation requires a live create-and-update test using the product runtime
+and exact readback of the same playlist. Spotify's isolated publisher has passed
+create/add/remove/reorder tests. Apple's ordinary browser create/append path has been
+verified, but its unattended server token transport remains unverified. Keep Apple
+publishing disabled until that server test succeeds. Remove/reorder are deliberately
+excluded from the Apple product contract. Research spikes remain isolated.
 
 ## Retained code
 
@@ -239,7 +274,8 @@ present, the recipient page cannot identify the original source and offers only
 provider searches, regardless of the historical `complete` flag. It ignores
 invalid provider URLs. Existing JSON rows and D1 migrations remain unchanged.
 
-The Worker no longer exports the old Thread Durable Object. Deploying over an
+The Worker exports a new `ThreadPublisher` Durable Object for background publishing;
+it does not export the old Thread Durable Object. Deploying over an
 existing installation requires a deliberate Durable Object migration decision
 first; this change does not schedule deletion of its stored data. Production
 commands must be run by Omar. Browser requests now receive recipient HTML; JSON
