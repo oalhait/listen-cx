@@ -3,14 +3,17 @@ import assert from 'node:assert/strict';
 import {
   createJournal,
   findPlaylistByName,
+  loadActiveJournal,
   markSubmitted,
   planMutation,
   readFullPlaylist,
   recordPlaylist,
   recordFailure,
   reserveOperation,
+  saveActiveJournal,
   submitOperation,
   verifyOperation,
+  verifyWithRetry,
 } from './same-id.mjs';
 
 const tracks = (...ids) => ids.map(id => ({ id: `i.${id}`, type: 'library-songs', attributes: { playParams: { catalogId: id } } }));
@@ -134,15 +137,54 @@ test('leaves failed writes submitted and never calls the provider if durable sav
   assert.equal(called, false);
 });
 
-test('recovers a uniquely named uncertain creation through paginated read-only listing', async () => {
+test('recovers an uncertain creation only from one exact-content name match', async () => {
   const paths = [];
   const found = await findPlaylistByName(async path => {
     paths.push(path);
+    if (path.includes('p.same?')) return { data: [{ id: 'p.same' }] };
+    if (path.includes('p.same/tracks?')) return { data: tracks('A', 'B') };
     return path.includes('offset=2') ? { data: [{ id: 'p.same', attributes: { name: 'DISPOSABLE proof' } }] } : { data: [{ id: 'p.other', attributes: { name: 'Other' } }], next: '/v1/me/library/playlists?offset=2' };
-  }, 'DISPOSABLE proof');
+  }, 'DISPOSABLE proof', ['A', 'B']);
   assert.equal(found, 'p.same');
-  assert.equal(paths.length, 2);
-  await assert.rejects(() => findPlaylistByName(async () => ({ data: [{ id: 'p.one', attributes: { name: 'same' } }, { id: 'p.two', attributes: { name: 'same' } }] }), 'same'), /Multiple playlists/);
+  assert.equal(paths.length, 4);
+
+  const candidateRequest = async path => {
+    if (path.includes('p.one?')) return { data: [{ id: 'p.one' }] };
+    if (path.includes('p.two?')) return { data: [{ id: 'p.two' }] };
+    if (path.includes('/tracks?')) return { data: tracks('A', 'B') };
+    return { data: [{ id: 'p.one', attributes: { name: 'same' } }, { id: 'p.two', attributes: { name: 'same' } }] };
+  };
+  await assert.rejects(() => findPlaylistByName(candidateRequest, 'same', ['A', 'B']), /Multiple playlists/);
+  assert.equal(await findPlaylistByName(async path => path.includes('?include=') ? { data: [{ id: 'p.wrong' }] } : path.includes('/tracks?') ? { data: tracks('B', 'A') } : { data: [{ id: 'p.wrong', attributes: { name: 'same' } }] }, 'same', ['A', 'B']), null);
+});
+
+test('keeps one active journal across token refresh and preserves uncertain writes', () => {
+  const values = new Map();
+  const storage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
+  let journal = loadActiveJournal(storage, () => 'run-one');
+  journal = markSubmitted(reserveOperation(journal, 'create', planMutation(null, ['A'])), 'create');
+  saveActiveJournal(storage, journal);
+  const refreshed = loadActiveJournal(storage, () => 'run-two');
+  assert.equal(refreshed.sessionID, 'run-one');
+  assert.equal(refreshed.operations[0].status, 'submitted');
+});
+
+test('retries only exact successful readback mismatches', async t => {
+  let journal = markSubmitted(reserveOperation(createJournal('retry'), 'create', planMutation(null, ['A'])), 'create');
+  journal = recordPlaylist(journal, 'create', 'p.same');
+  let reads = 0;
+  let waits = 0;
+  const result = await verifyWithRetry(journal, 'create', async () => ({ id: 'p.same', entries: [{ catalogId: ++reads === 1 ? 'B' : 'A' }] }), async () => { waits += 1; });
+  assert.equal(result.journal.operations[0].status, 'verified');
+  assert.equal(reads, 2);
+  assert.equal(waits, 1);
+  for (const [name, failure] of [['authorization', Object.assign(new Error('denied'), { status: 403 })], ['rate limit', Object.assign(new Error('limited'), { status: 429 })], ['transport', new TypeError('network')]]) {
+    await t.test(name, async () => {
+      let attempts = 0;
+      await assert.rejects(() => verifyWithRetry(journal, 'create', async () => { attempts += 1; throw failure; }, async () => { waits += 1; }), failure);
+      assert.equal(attempts, 1);
+    });
+  }
 });
 
 test('records only bounded provider failure evidence while preserving the retry fence', () => {

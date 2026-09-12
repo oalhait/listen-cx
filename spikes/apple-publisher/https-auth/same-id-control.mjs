@@ -1,5 +1,5 @@
 import { authorizationError, tokenLifetime } from './web-authorization.mjs';
-import { createJournal, findPlaylistByName, planMutation, readFullPlaylist, recordFailure, recordPlaylist, submitOperation, verifyOperation } from './same-id.mjs';
+import { findPlaylistByName, loadActiveJournal, planMutation, readFullPlaylist, recordFailure, recordPlaylist, saveActiveJournal, submitOperation, verifyWithRetry } from './same-id.mjs';
 
 const fixtures = { A: '704790294', B: '6782695839', C: '617154366', D: '202272624' };
 const steps = [
@@ -16,29 +16,18 @@ let tokenTimes;
 let journal;
 let lastReadback = null;
 
-function journalStorageKey(sessionID) {
-  return `listen-cx-apple-same-id-${sessionID}`;
-}
-
 function playlistName() {
   return `DISPOSABLE listen.cx same-ID ${journal.sessionID}`;
 }
 
 function persist(next) {
-  localStorage.setItem(journalStorageKey(next.sessionID), JSON.stringify(next));
+  saveActiveJournal(localStorage, next);
   journal = next;
   render();
 }
 
-function loadJournal(sessionID) {
-  const stored = localStorage.getItem(journalStorageKey(sessionID));
-  if (!stored) return createJournal(sessionID);
-  const parsed = JSON.parse(stored);
-  if (parsed?.version !== 1 || parsed.sessionID !== sessionID || !Array.isArray(parsed.operations) || parsed.operations.length > steps.length) throw new Error('INVALID_LOCAL_JOURNAL');
-  for (const [index, operation] of parsed.operations.entries()) {
-    if (operation?.name !== steps[index].name || !['reserved', 'submitted', 'verified'].includes(operation.status)) throw new Error('INVALID_LOCAL_JOURNAL');
-  }
-  return parsed;
+function loadJournal() {
+  return loadActiveJournal(localStorage, () => `run-${crypto.randomUUID()}`);
 }
 
 function render() {
@@ -56,7 +45,7 @@ function render() {
 
 async function request(path, options = {}) {
   const result = await music.api.music(path, {}, { fetchOptions: { method: options.method ?? 'GET', ...(options.body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(options.body) } : {}) } });
-  return result.data;
+  return result?.data ?? null;
 }
 
 async function preflight() {
@@ -70,19 +59,10 @@ async function preflight() {
 }
 
 async function verify(name, attempts = 6) {
-  let failure;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    try {
-      lastReadback = await readFullPlaylist(request, journal.playlist.id);
-      const next = verifyOperation(journal, name, lastReadback);
-      persist(next);
-      return lastReadback;
-    } catch (error) {
-      failure = error;
-      if (attempt < attempts - 1) await new Promise(resolve => setTimeout(resolve, 2000));
-    }
-  }
-  throw failure;
+  const result = await verifyWithRetry(journal, name, id => readFullPlaylist(request, id), () => new Promise(resolve => setTimeout(resolve, 2000)), attempts);
+  lastReadback = result.readback;
+  persist(result.journal);
+  return lastReadback;
 }
 
 async function runStep(step) {
@@ -108,7 +88,7 @@ async function reconcile() {
   const operation = journal.operations.at(-1);
   if (!operation || operation.status !== 'submitted') throw new Error('NO_UNCERTAIN_WRITE');
   if (!journal.playlist && operation.name === 'create') {
-    const id = await findPlaylistByName(request, playlistName());
+    const id = await findPlaylistByName(request, playlistName(), operation.desiredCatalogIds);
     if (!id) throw new Error('CREATE_STILL_UNRESOLVED');
     persist(recordPlaylist(journal, 'create', id));
   }
@@ -118,7 +98,11 @@ async function reconcile() {
 
 async function exclusive(callback) {
   if (!navigator.locks) throw new Error('DURABLE_BROWSER_LOCK_UNAVAILABLE');
-  return navigator.locks.request('listen-cx-apple-same-id-proof', { mode: 'exclusive' }, callback);
+  return navigator.locks.request('listen-cx-apple-same-id-proof', { mode: 'exclusive' }, async () => {
+    journal = loadJournal();
+    render();
+    return callback();
+  });
 }
 
 function action(button, callback) {
@@ -159,7 +143,7 @@ async function initialize() {
   if (!response.ok) throw new Error(response.status === 410 ? 'SESSION_EXPIRED' : 'INVITATION_REQUIRED');
   const { developerToken, issuedAt, expiresAt } = await response.json();
   tokenTimes = { issuedAt, expiresAt };
-  journal = loadJournal(`s${issuedAt}`);
+  journal = loadJournal();
   document.addEventListener('musickitloaded', async () => {
     try {
       await window.MusicKit.configure({ developerToken, app: { name: 'listen.cx disposable same-ID proof', build: '1' } });

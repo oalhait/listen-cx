@@ -1,6 +1,15 @@
 const playlistID = /^p\.[A-Za-z0-9.-]+$/;
+const sessionIDPattern = /^[A-Za-z0-9_-]{1,64}$/;
 const operationOrder = ['create', 'append', 'remove', 'reorder'];
 const failureReasons = new Set(['AUTHORIZATION_ERROR', 'AUTHORIZATION_INCOMPLETE', 'ACCESS_DENIED', 'CONFIGURATION_ERROR', 'NETWORK_ERROR', 'PROVIDER_ERROR', 'REQUEST_ERROR', 'SERVER_ERROR', 'SERVICE_UNAVAILABLE', 'STOREFRONT_READBACK_FAILED', 'SUBSCRIPTION_ERROR', 'TOKEN_EXPIRED', 'USER_INTERACTION_REQUIRED', 'UNKNOWN_ERROR']);
+const activeRunStorageKey = 'listen-cx-apple-same-id-active-run';
+
+class ReadbackMismatchError extends Error {
+  constructor(message = 'Readback does not match the exact desired order') {
+    super(message);
+    this.name = 'ReadbackMismatchError';
+  }
+}
 
 function catalogIDs(entries) {
   return entries.map(entry => entry.catalogId);
@@ -10,8 +19,8 @@ function same(left, right) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-function validateIDs(ids) {
-  if (!Array.isArray(ids) || ids.length === 0 || ids.length > 50 || ids.some(id => typeof id !== 'string' || !id)) throw new Error('Invalid catalog identity list');
+function validateIDs(ids, allowEmpty = false) {
+  if (!Array.isArray(ids) || (!allowEmpty && ids.length === 0) || ids.length > 50 || ids.some(id => typeof id !== 'string' || !id)) throw new Error('Invalid catalog identity list');
 }
 
 export function planMutation(current, desiredCatalogIds) {
@@ -72,9 +81,10 @@ export async function readFullPlaylist(request, id) {
   };
 }
 
-export async function findPlaylistByName(request, name) {
+export async function findPlaylistByName(request, name, expectedCatalogIds) {
   if (typeof name !== 'string' || !name) throw new Error('Invalid playlist name');
-  const matches = [];
+  validateIDs(expectedCatalogIds);
+  const candidates = new Set();
   const visited = new Set();
   let path = '/v1/me/library/playlists?limit=100';
   for (let page = 0; path && page < 10; page += 1) {
@@ -82,18 +92,58 @@ export async function findPlaylistByName(request, name) {
     visited.add(path);
     const result = await request(path);
     for (const playlist of result.data ?? []) {
-      if (playlist?.attributes?.name === name && playlistID.test(playlist.id ?? '')) matches.push(playlist.id);
+      if (playlist?.attributes?.name === name && playlistID.test(playlist.id ?? '')) candidates.add(playlist.id);
     }
     path = result.next ?? null;
   }
   if (path) throw new Error('Playlist listing exceeded the page limit');
+  const matches = [];
+  for (const id of candidates) {
+    const readback = await readFullPlaylist(request, id);
+    if (same(catalogIDs(readback.entries), expectedCatalogIds)) matches.push(id);
+  }
   if (matches.length > 1) throw new Error('Multiple playlists match the creation reservation');
   return matches[0] ?? null;
 }
 
 export function createJournal(sessionID) {
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(sessionID)) throw new Error('Invalid session ID');
+  if (!sessionIDPattern.test(sessionID)) throw new Error('Invalid session ID');
   return { version: 1, sessionID, playlist: null, operations: [] };
+}
+
+function journalStorageKey(sessionID) {
+  return `listen-cx-apple-same-id-journal-${sessionID}`;
+}
+
+function validateJournal(journal, sessionID) {
+  if (journal?.version !== 1 || journal.sessionID !== sessionID || !Array.isArray(journal.operations) || journal.operations.length > operationOrder.length) throw new Error('INVALID_LOCAL_JOURNAL');
+  if (journal.playlist !== null && (!playlistID.test(journal.playlist?.id ?? '') || (journal.playlist.metadata !== null && typeof journal.playlist.metadata !== 'object'))) throw new Error('INVALID_LOCAL_JOURNAL');
+  for (const [index, operation] of journal.operations.entries()) {
+    if (operation?.name !== operationOrder[index] || !['reserved', 'submitted', 'verified'].includes(operation.status) || !['create', 'append', 'replace'].includes(operation.kind)) throw new Error('INVALID_LOCAL_JOURNAL');
+    validateIDs(operation.expectedCatalogIds, true);
+    validateIDs(operation.desiredCatalogIds);
+    if (index < journal.operations.length - 1 && operation.status !== 'verified') throw new Error('INVALID_LOCAL_JOURNAL');
+  }
+  return journal;
+}
+
+export function loadActiveJournal(storage, createSessionID) {
+  let sessionID = storage.getItem(activeRunStorageKey);
+  if (sessionID === null) {
+    sessionID = createSessionID();
+    if (!sessionIDPattern.test(sessionID)) throw new Error('Invalid session ID');
+    storage.setItem(activeRunStorageKey, sessionID);
+  } else if (!sessionIDPattern.test(sessionID)) {
+    throw new Error('INVALID_LOCAL_JOURNAL');
+  }
+  const stored = storage.getItem(journalStorageKey(sessionID));
+  return stored === null ? createJournal(sessionID) : validateJournal(JSON.parse(stored), sessionID);
+}
+
+export function saveActiveJournal(storage, journal) {
+  if (storage.getItem(activeRunStorageKey) !== journal?.sessionID) throw new Error('ACTIVE_RUN_CHANGED');
+  validateJournal(journal, journal.sessionID);
+  storage.setItem(journalStorageKey(journal.sessionID), JSON.stringify(journal));
 }
 
 function currentOperation(journal, name) {
@@ -148,9 +198,23 @@ export function verifyOperation(journal, name, readback) {
   const operation = currentOperation(journal, name);
   if (operation.status !== 'submitted' || !journal.playlist || readback.id !== journal.playlist.id) throw new Error('Verification requires the same playlist and a submitted operation');
   const actual = catalogIDs(readback.entries);
-  if (!same(actual, operation.desiredCatalogIds)) throw new Error('Readback does not match the exact desired order');
+  if (!same(actual, operation.desiredCatalogIds)) throw new ReadbackMismatchError();
   const next = updateOperation(journal, name, { status: 'verified', verifiedAt: new Date().toISOString(), observedCatalogIds: actual });
   return { ...next, playlist: { id: journal.playlist.id, metadata: readback.metadata ?? journal.playlist.metadata } };
+}
+
+export async function verifyWithRetry(journal, name, read, wait, attempts = 6) {
+  if (!Number.isInteger(attempts) || attempts < 1 || attempts > 6) throw new Error('Invalid verification attempt count');
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const readback = await read(journal.playlist?.id);
+    try {
+      return { journal: verifyOperation(journal, name, readback), readback };
+    } catch (error) {
+      if (!(error instanceof ReadbackMismatchError) || attempt === attempts - 1) throw error;
+      await wait();
+    }
+  }
+  throw new Error('Verification did not complete');
 }
 
 export async function submitOperation(journal, name, plan, request, save, attributes = null) {

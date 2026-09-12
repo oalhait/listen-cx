@@ -19,7 +19,8 @@ test('runs the four separately initiated mutations on one ID with submitted stat
   let authorized = false;
   let librarySequence = 0;
   const fixtures = ['704790294', '6782695839', '617154366', '202272624'];
-  const journal = () => JSON.parse([...storage.values()][0]);
+  const journalEntry = () => [...storage.entries()].find(([key]) => key.startsWith('listen-cx-apple-same-id-journal-'));
+  const journal = () => JSON.parse(journalEntry()[1]);
   const music = {
     get isAuthorized() { return authorized; },
     addEventListener() {},
@@ -41,7 +42,7 @@ test('runs the four separately initiated mutations on one ID with submitted stat
         if (method === 'POST') providerTracks.push(...body.data.map(item => ({ catalogId: item.id, libraryId: `i.${++librarySequence}`, type: 'library-songs' })));
         else providerTracks = body.data.map(item => providerTracks.find(track => track.libraryId === item.id));
         writes.push({ method, path, body });
-        return { data: {} };
+        return undefined;
       }
       if (path.startsWith('/v1/me/library/playlists/p.same?')) return { data: { data: [{ id: 'p.same', attributes: { isPublic: false, hasCatalog: false } }] } };
       if (path.startsWith('/v1/me/library/playlists/p.same/tracks?')) return { data: { data: providerTracks.map(track => ({ id: track.libraryId, type: track.type, attributes: { playParams: { catalogId: track.catalogId } } })) } };
@@ -67,6 +68,13 @@ test('runs the four separately initiated mutations on one ID with submitted stat
     await import(`${pathToFileURL(join(directory, 'same-id-control.mjs')).href}?test=1`);
     await listeners.musickitloaded();
     await elements.authorize.onclick();
+    const initial = structuredClone(journal());
+    providerTracks = fixtures.slice(0, 3).map(id => ({ catalogId: id, libraryId: `i.${++librarySequence}`, type: 'library-songs' }));
+    storage.set(journalEntry()[0], JSON.stringify({ ...initial, playlist: { id: 'p.same', metadata: null }, operations: [{ name: 'create', kind: 'create', expectedCatalogIds: [], desiredCatalogIds: fixtures.slice(0, 3), status: 'verified' }] }));
+    await elements.create.onclick();
+    assert.equal(writes.length, 0);
+    storage.set(journalEntry()[0], JSON.stringify(initial));
+    providerTracks = [];
     for (const name of ['create', 'append', 'remove', 'reorder']) await elements[name].onclick();
     assert.deepEqual(providerTracks.map(track => track.catalogId), ['202272624', '617154366', '704790294']);
     assert.deepEqual(writes.map(write => write.method), ['POST', 'POST', 'PUT', 'PUT']);
