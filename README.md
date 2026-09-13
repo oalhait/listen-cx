@@ -200,8 +200,8 @@ International Standard Recording Code (ISRC), when available. If that finds no
 compatible candidate, it searches by title and artist. It checks recording version, duration,
 content ratings, and destination playability. Equivalent releases sharing an ISRC
 are grouped; a clear result is selected automatically. Ambiguous results remain
-unresolved. The frontend shows automatic match links without manual change or review
-controls. The management API still supports confirmed links for compatibility; it
+unresolved. The frontend presents one unified song entry without provider match links or manual
+matching controls. The management API still supports confirmed links for compatibility; it
 verifies the catalog URL, while the manager verifies the recording.
 Manual confirmations remain immutable. Unverified legacy sources stay unresolved.
 Missing identities block the entire provider snapshot, preserving duplicates and order.

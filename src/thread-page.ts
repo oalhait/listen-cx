@@ -24,25 +24,8 @@ export function threadCreationPage(): string {
     <p id="thread-message" class="form-message" role="status"></p><p class="thread-note">Songs are saved here. Connect your music account in settings, then subscribe to a Thread for your own playlist.</p></main>`);
 }
 
-function matchUrl(provider: Provider, storefront: string, id: string): string | null {
-  if (provider === "spotify") return /^[A-Za-z0-9]{22}$/.test(id) ? `https://open.spotify.com/track/${id}` : null;
-  return /^[a-z]{2}$/.test(storefront) && /^[0-9]+$/.test(id) ? `https://music.apple.com/${storefront}/song/${id}` : null;
-}
-
-function matchSummary(song: ThreadContribution): string {
-  if (song.counterpart) return "";
-  const seen = new Set<string>();
-  return (song.matches ?? []).filter(match => match.status === "matched" && match.selected).map(match => {
-    const url = matchUrl(match.provider, match.storefront, match.selected!.id);
-    if (!url || seen.has(url)) return "";
-    seen.add(url);
-    const name = match.provider === "apple" ? "Apple Music" : "Spotify";
-    return `<a class="thread-note" href="${escape(url)}" target="_blank" rel="noopener noreferrer">Matched on ${name} ↗</a>`;
-  }).join("");
-}
-
 function songRow(song: ThreadContribution, index: number, count: number, managed: boolean): string {
-  return `<li class="thread-song" data-contribution-id="${song.id}">${artwork(song.artworkUrl)}<div class="track-meta"><a href="/${encodeURIComponent(song.linkSlug)}"><strong>${escape(song.title)}</strong></a><span>${escape(song.artist)}</span>${matchSummary(song)}</div>${managed ? `<div class="song-actions"><button type="button" data-move="up" data-id="${song.id}" aria-label="Move ${escape(song.title)} up" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" data-move="down" data-id="${song.id}" aria-label="Move ${escape(song.title)} down" ${index === count - 1 ? "disabled" : ""}>↓</button><button type="button" data-remove="${song.id}" aria-label="Remove ${escape(song.title)}">Remove</button></div>` : ""}</li>`;
+  return `<li class="thread-song" data-contribution-id="${song.id}">${artwork(song.artworkUrl)}<div class="track-meta"><a href="/${encodeURIComponent(song.linkSlug)}"><strong>${escape(song.title)}</strong></a><span>${escape(song.artist)}</span></div>${managed ? `<div class="song-actions"><button type="button" data-move="up" data-id="${song.id}" aria-label="Move ${escape(song.title)} up" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" data-move="down" data-id="${song.id}" aria-label="Move ${escape(song.title)} down" ${index === count - 1 ? "disabled" : ""}>↓</button><button type="button" data-remove="${song.id}" aria-label="Remove ${escape(song.title)}">Remove</button></div>` : ""}</li>`;
 }
 
 function publicationCard(publication: PublicationStatus, canRetry: boolean): string {

@@ -117,13 +117,16 @@ it("shows a personal subscription and account settings instead of shared provide
   expect(threadPage(view, false, [], true)).not.toContain('data-identify=');
 });
 
-it('keeps automatic match links without manual change or review controls', () => {
+it('renders unified song entries without provider match links or controls', () => {
   const song = view.contributions[0]!;
   const matched = { provider: 'apple' as const, storefront: 'us', status: 'matched' as const, method: 'metadata' as const,
     selected: { id: '123', title: 'Song', artist: 'Artist' }, candidates: [] };
-  const page = threadPage({ ...view, contributions: [{ ...song, matches: [matched] }] }, true, [], true);
-  expect(page).toContain('Matched on Apple Music');
-  expect(page).toContain('https://music.apple.com/us/song/123');
+  const page = threadPage({ ...view, contributions: [{ ...song, matches: [matched, { ...matched, provider: 'spotify', selected: { ...matched.selected, id: '3OM6qQmdFV6uy61GIqpRtf' } }] }] }, true, [], true);
+  expect(page).not.toContain('Matched on');
+  expect(page).not.toContain('https://music.apple.com/us/song/123');
+  expect(page).toContain('<strong>Song &lt;one&gt;</strong>');
+  expect(page).toContain(`href="/${song.linkSlug}"`);
+  expect(page).not.toContain('https://open.spotify.com/track/3OM6qQmdFV6uy61GIqpRtf');
   expect(page).not.toContain('Change Apple Music match');
   expect(page).not.toContain('data-identify=');
   const uncertain = threadPage({ ...view, contributions: [{ ...song, matches: [{ ...matched, status: 'ambiguous', selected: null,
