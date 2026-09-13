@@ -94,7 +94,13 @@ export async function mountAccount(root) {
   const buttons = () => {
     root.setAttribute('aria-busy', String(busy));
     refresh.disabled = busy;
-    root.querySelectorAll('[data-sign-in]').forEach(button => { button.disabled = busy || !data?.available?.[button.dataset.signIn]; });
+    root.querySelectorAll('[data-sign-in]').forEach(button => {
+      const available = !!data?.available?.[button.dataset.signIn];
+      const name = button.dataset.signIn === 'apple' ? 'Apple Music' : 'Spotify';
+      button.disabled = busy || !available;
+      button.setAttribute('aria-busy', String(busy && available));
+      button.textContent = available ? `Continue with ${name} ↗` : `${name} · unavailable`;
+    });
     const provider = data?.account?.provider;
     reconnect.disabled = busy || !data?.available?.[provider] || (provider === 'apple' && (!music || !authorizationBinding));
     find('#account-sign-out').disabled = busy;

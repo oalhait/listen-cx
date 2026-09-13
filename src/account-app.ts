@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { D1AccountStore, type Account, type Subscription } from "./account-db.js";
+import { currentAccount } from "./account-session.js";
 import { accountPage } from "./account-page.js";
 import { appleDeveloperToken } from "./music-connection-store.js";
 import { exchangeSpotifyCode, getSpotifyAccount, makePkce, MusicAuthError, seal, spotifyAuthorizeUrl, unseal, type Sealed } from "./music-auth.js";
@@ -29,10 +30,7 @@ export function createAccountApp(env: RuntimeEnv, baseUrl: string, onChange: (ca
   const origin = new URL(baseUrl).origin;
   const appleAvailable = () => Boolean(availableConnections(env).includes("apple") && env.APPLE_SIGN_IN_CLIENT_ID
     && env.APPLE_SIGN_IN_KEY_ID && env.APPLE_SIGN_IN_TEAM_ID && env.APPLE_SIGN_IN_PRIVATE_KEY_P8);
-  async function current(c: Context): Promise<Account | null> {
-    const token = getCookie(c, sessionCookie);
-    return token && /^[A-Za-z0-9_-]{43}$/.test(token) ? store.session(await sha256(token)) : null;
-  }
+  const current = (c: Context) => currentAccount(c, env.DB);
   async function signedIn(c: Context): Promise<Account> {
     const account = await current(c);
     if (!account) throw new ThreadError(401, "sign_in_required", "Sign in to your music account first.");

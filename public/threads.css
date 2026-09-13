@@ -61,7 +61,8 @@
 .connection-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; margin-top: 20px; }
 .connection-actions .generate-button { min-height: 44px; white-space: normal; text-align: left; }
 .connection-actions .text-button { min-height: 44px; }
-.connection-actions button:disabled { opacity: .5; cursor: wait; }
+.connection-actions button:disabled { opacity: .5; cursor: not-allowed; }
+button[aria-busy="true"]:disabled { cursor: wait; }
 .connection-confirmation { margin-top: 20px; padding-top: 20px; border-top: 1px solid #e3e3e3; }
 .connection-confirmation h3 { font-size: 16px; font-weight: 500; margin: 0 0 10px; }
 .connection-confirmation p { font-size: 14px; color: #555; line-height: 1.6; }
@@ -69,3 +70,12 @@
   .music-connection { padding: 18px; }
   .thread-sync .section-caption { flex-wrap: wrap; gap: 10px; }
 }
+
+.history-list { list-style: none; padding: 0; display: grid; gap: 12px; margin: 28px 0; }
+.history-list a { display: grid; gap: 8px; padding: 22px; background: white; border: 1px solid #e3e3e3; border-radius: 12px; }
+.history-list a:hover { border-color: #999; }
+.history-list strong { font-size: 18px; font-weight: 500; overflow-wrap: anywhere; }
+.history-list span { font-size: 13px; color: #777; }
+.history-recovery { margin-top: 32px; padding-top: 22px; border-top: 1px solid #ddd; }
+.history-recovery summary { cursor: pointer; font-size: 14px; }
+.history-recovery label { display: block; margin: 18px 0 12px; font-size: 14px; }

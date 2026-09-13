@@ -143,6 +143,15 @@ Existing rows, capability digests, removed contributions, and historical positio
 are preserved. Legacy Threads start at revision zero with unverified catalog
 identities. The old Thread Durable Object is not restored.
 
+`/threads` lists the Threads saved to the signed-in account and this browser's
+anonymous history, with creation dates, song counts, and closed state. New creations
+are recorded automatically; visiting a Thread with verified management access also
+saves it. Migration `0008` adds these private history associations without guessing
+owners for older rows. Older Threads can be recovered by pasting a private management
+link. Public sharing links cannot establish history ownership. Anonymous history uses
+an HttpOnly browser cookie; saving it across devices is an explicit signed-in action.
+No raw management secret is stored in the history table or returned by its list API.
+
 All Thread mutations require JSON, a matching `Origin`, and
 `X-Listen-Action: thread`. Thread responses are private/no-store and use
 `Referrer-Policy: no-referrer`; the pages disallow third-party scripts and framing.

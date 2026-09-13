@@ -1,3 +1,4 @@
+import { ThreadHistoryService, createThreadHistoryApp } from "./thread-history-app.js";
 import { Hono } from "hono";
 import { createAccountApp } from "./account-app.js";
 import { D1PublicationStore } from "./publication-db.js";
@@ -61,6 +62,12 @@ export default {
   fetch(request, env, ctx) {
     const baseUrl = getWorkerBaseUrl(env, request.url);
     const onChange = (capability: string) => { ctx.waitUntil(wakeDue(env, capability)); };
+    const history = new ThreadHistoryService(env.DB);
+    const connections = new Hono().route("/", createThreadHistoryApp(env.DB, baseUrl, history));
+    if (env.ACCOUNT_SUBSCRIPTIONS_ENABLED === "true") {
+      connections.route("/", createAccountApp(env, baseUrl, onChange));
+      connections.get("/t/:capability/manage/apps", c => c.redirect(`/settings?thread=${encodeURIComponent(c.req.param("capability"))}`));
+    } else connections.route("/", createMusicConnectionsApp(env, baseUrl, onChange));
     return createApp({
       resolver: new Resolver(new SpotifyClient(), new ItunesClient()),
       store: new D1LinkStore(env.DB),
@@ -69,9 +76,8 @@ export default {
       threadStore: new D1ThreadStore(env.DB),
       appleMusic: createAppleMusicIssuer(env),
       baseUrl,
-      connections: env.ACCOUNT_SUBSCRIPTIONS_ENABLED === "true"
-        ? new Hono().route("/", createAccountApp(env, baseUrl, onChange)).get("/t/:capability/manage/apps", c => c.redirect(`/settings?thread=${encodeURIComponent(c.req.param("capability"))}`))
-        : createMusicConnectionsApp(env, baseUrl, onChange),
+      connections,
+      history,
       publishing: {
         accountSubscriptions: env.ACCOUNT_SUBSCRIPTIONS_ENABLED === "true",
         availableProviders: availableConnections(env),

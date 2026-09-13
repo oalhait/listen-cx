@@ -153,7 +153,7 @@ input::placeholder { color: #888; }
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
-button:disabled { cursor: wait; opacity: .65; }
+button:disabled { cursor: not-allowed; opacity: .65; }
 .link-result { flex-direction: row; align-items: center; text-align: left; padding: 14px; gap: 14px; }
 .result-track { min-width: 0; flex: 1; }
 .result-track img { width: 48px; height: 48px; border-radius: 6px; object-fit: cover; flex-shrink: 0; }

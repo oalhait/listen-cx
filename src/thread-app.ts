@@ -31,7 +31,7 @@ export interface ThreadPublishing {
   requireConnection?: (authorization: ManagementAuthorization, provider: Provider) => Promise<void>;
 }
 
-export function createThreadApp({ resolver, store, baseUrl, publishing }: { resolver: Pick<Resolver, "resolve">; store: D1ThreadStore; baseUrl: string; publishing?: ThreadPublishing }) {
+export function createThreadApp({ resolver, store, baseUrl, publishing, history }: { resolver: Pick<Resolver, "resolve">; store: D1ThreadStore; baseUrl: string; publishing?: ThreadPublishing; history?: { remember(c: Context, capability: string): Promise<void>; prepare?(c: Context): Promise<void> } }) {
   const app = new Hono();
   for (const path of ["/threads/new", "/t/*", "/api/threads", "/api/threads/*"]) {
     app.use(path, async (c, next) => {
@@ -56,11 +56,15 @@ export function createThreadApp({ resolver, store, baseUrl, publishing }: { reso
     return secret ? authorizeManagementCapability(store, capability, secret) : null;
   };
 
-  app.get("/threads/new", c => c.html(threadCreationPage()));
+  app.get("/threads/new", async c => {
+    await history?.prepare?.(c);
+    return c.html(threadCreationPage());
+  });
   app.post("/api/threads", async c => {
     const body = await bodyFields(c, ["title", "creationKey"]);
     if (typeof body.title !== "string" || typeof body.creationKey !== "string") throw new ThreadError(400, "invalid_input", "Send a title and creation key.");
     const thread = await store.create(body.title, body.creationKey);
+    await history?.remember(c, thread.publicCapability);
     setManagementCookie(c, thread.publicCapability, body.creationKey);
     const publicUrl = `${baseUrl.replace(/\/$/, "")}/t/${thread.publicCapability}`;
     return c.json({ thread, publicUrl, managementUrl: `${publicUrl}#manage=${body.creationKey}` }, 201);
@@ -70,7 +74,9 @@ export function createThreadApp({ resolver, store, baseUrl, publishing }: { reso
     const capability = c.req.param("capability");
     const thread = await store.get(capability);
     if (!thread) return c.html(threadPage(null, false), 404);
-    return c.html(threadPage(thread, Boolean(await authorization(c, capability)), publishing?.availableProviders, publishing?.accountSubscriptions));
+    const managed = Boolean(await authorization(c, capability));
+    if (managed) await history?.remember(c, capability);
+    return c.html(threadPage(thread, managed, publishing?.availableProviders, publishing?.accountSubscriptions));
   });
   app.post("/api/threads/:capability/contributions", async c => {
     const capability = c.req.param("capability");
