@@ -24,13 +24,39 @@ export function threadCreationPage(): string {
     <p id="thread-message" class="form-message" role="status"></p><p class="thread-note">Songs are saved here. Connect your music account in settings, then subscribe to a Thread for your own playlist.</p></main>`);
 }
 
+function matchUrl(provider: Provider, storefront: string, id: string): string | null {
+  if (provider === "spotify") return /^[A-Za-z0-9]{22}$/.test(id) ? `https://open.spotify.com/track/${id}` : null;
+  return /^[a-z]{2}$/.test(storefront) && /^[0-9]+$/.test(id) ? `https://music.apple.com/${storefront}/song/${id}` : null;
+}
+
+function matchSummary(song: ThreadContribution): string {
+  if (song.counterpart) return "";
+  const seen = new Set<string>();
+  return (song.matches ?? []).filter(match => match.status === "matched" && match.selected).map(match => {
+    const url = matchUrl(match.provider, match.storefront, match.selected!.id);
+    if (!url || seen.has(url)) return "";
+    seen.add(url);
+    const name = match.provider === "apple" ? "Apple Music" : "Spotify";
+    return `<a class="thread-note" href="${escape(url)}" target="_blank" rel="noopener noreferrer">Matched on ${name} ↗</a>`;
+  }).join("");
+}
+
 function counterpartForm(song: ThreadContribution): string {
   const name = song.source.provider === "spotify" ? "Apple Music" : "Spotify";
-  return `<details class="counterpart"><summary>Add ${name} link</summary><p class="thread-note">The source link does not identify the same recording in ${name}’s catalog. A matching link is only needed to sync this song to ${name}.</p><form data-identify="${song.id}"><label for="counterpart-${song.id}">${name} track link</label><input id="counterpart-${song.id}" name="url" type="url" required placeholder="Paste the matching track link"><label class="counterpart-confirm"><input name="confirmed" type="checkbox" required> I checked this is the same recording. This match cannot be changed.</label><button type="submit" class="text-button">Confirm match</button></form></details>`;
+  const matches = song.matches ?? [];
+  const matched = matches.some(match => match.status === "matched");
+  const label = matched ? `Change ${name} match` : matches.length ? `Review ${name} match` : `Add ${name} link`;
+  const candidates = matches.filter(match => match.status !== "matched").flatMap(match => match.candidates.map(candidate => ({ ...candidate,
+    url: matchUrl(match.provider, match.storefront, candidate.id) }))).filter(candidate => candidate.url).slice(0, 3);
+  const suggestions = candidates.length ? `<p class="thread-note">Possible matches to review:</p><ul>${candidates.map(candidate => `<li><a href="${escape(candidate.url!)}" target="_blank" rel="noopener noreferrer">${escape(candidate.title)} — ${escape(candidate.artist)} ↗</a></li>`).join("")}</ul>` : "";
+  const explanation = matched ? "You can replace the automatic match with a confirmed link. If it was already added to Apple Music, changing it may pause that playlist because Apple only supports additions."
+    : matches.length ? `We couldn't confidently choose the same recording on ${name}. Review a suggestion or paste the correct link.`
+    : `We'll look for the same recording automatically when someone subscribes on ${name}. You can also provide a matching link.`;
+  return `<details class="counterpart"><summary>${label}</summary><p class="thread-note">${explanation}</p>${suggestions}<form data-identify="${song.id}"><label for="counterpart-${song.id}">${name} track link</label><input id="counterpart-${song.id}" name="url" type="url" required placeholder="Paste the matching track link"><label class="counterpart-confirm"><input type="checkbox" name="confirmed" required> I checked that this is the same recording. This confirmed link cannot be changed.</label><button class="text-button" type="submit">Confirm matching link</button></form></details>`;
 }
 
 function songRow(song: ThreadContribution, index: number, count: number, managed: boolean, identify: boolean): string {
-  return `<li class="thread-song" data-contribution-id="${song.id}">${artwork(song.artworkUrl)}<div class="track-meta"><a href="/${encodeURIComponent(song.linkSlug)}"><strong>${escape(song.title)}</strong></a><span>${escape(song.artist)}</span>${identify ? counterpartForm(song) : ""}</div>${managed ? `<div class="song-actions"><button type="button" data-move="up" data-id="${song.id}" aria-label="Move ${escape(song.title)} up" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" data-move="down" data-id="${song.id}" aria-label="Move ${escape(song.title)} down" ${index === count - 1 ? "disabled" : ""}>↓</button><button type="button" data-remove="${song.id}" aria-label="Remove ${escape(song.title)}">Remove</button></div>` : ""}</li>`;
+  return `<li class="thread-song" data-contribution-id="${song.id}">${artwork(song.artworkUrl)}<div class="track-meta"><a href="/${encodeURIComponent(song.linkSlug)}"><strong>${escape(song.title)}</strong></a><span>${escape(song.artist)}</span>${matchSummary(song)}${identify ? counterpartForm(song) : ""}</div>${managed ? `<div class="song-actions"><button type="button" data-move="up" data-id="${song.id}" aria-label="Move ${escape(song.title)} up" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" data-move="down" data-id="${song.id}" aria-label="Move ${escape(song.title)} down" ${index === count - 1 ? "disabled" : ""}>↓</button><button type="button" data-remove="${song.id}" aria-label="Remove ${escape(song.title)}">Remove</button></div>` : ""}</li>`;
 }
 
 function publicationCard(publication: PublicationStatus, canRetry: boolean): string {
@@ -40,6 +66,7 @@ function publicationCard(publication: PublicationStatus, canRetry: boolean): str
   const status = !publication.connected ? "Not connected"
     : unresolved ? "Some songs still need a verified match."
     : publication.status === "blocked" ? "Sync needs attention"
+    : publication.failureCode === "matching_pending" ? "Finding matching songs…"
     : publication.status === "failed" ? "Sync failed. Your songs are saved here."
     : publication.status === "synced" && current ? "Synced"
     : "Waiting to sync";

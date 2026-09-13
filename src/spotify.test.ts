@@ -89,3 +89,12 @@ it("rejects missing embed metadata instead of inventing a track", async () => {
     ? Response.json({ title: "Cataracts" }) : new Response("<html></html>"));
   await expect(new SpotifyClient(fetcher).getTrack(TRACK_ID)).rejects.toThrow("spotify embed metadata missing");
 });
+
+
+it("retains explicit and playable facts from public embed metadata", async () => {
+  const fetcher = vi.fn<typeof fetch>(async input => String(input).includes('/oembed') ? Response.json({ title: 'Song' })
+    : new Response('<script id="__NEXT_DATA__" type="application/json">' + JSON.stringify({ props: { pageProps: { state: { data: { entity: {
+      type: 'track', id: TRACK_ID, title: 'Song', duration: 180000, artists: [{ name: 'Artist' }], isExplicit: true, isPlayable: true,
+    } } } } } }) + '</script>'));
+  expect(await new SpotifyClient(fetcher).getTrack(TRACK_ID)).toMatchObject({ explicit: true, playable: true });
+});

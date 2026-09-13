@@ -73,6 +73,19 @@ export class D1ThreadStore {
     if (!row) return null;
     const contributions: ThreadContribution[] = JSON.parse(row.songs);
     const publications: PublicationStatus[] = JSON.parse(row.publications);
+    const matches = await this.db.withSession("first-primary").prepare(`SELECT DISTINCT m.contribution_id,
+      m.provider, m.storefront, m.status, m.result_json FROM automatic_track_matches m
+      JOIN thread_contributions c ON c.id = m.contribution_id JOIN threads t ON t.id = c.thread_id
+      WHERE t.public_capability = ? AND c.removed_at IS NULL`).bind(capability)
+      .all<{ contribution_id: number; provider: Provider; storefront: string; status: "matched" | "ambiguous" | "unavailable"; result_json: string }>();
+    for (const match of matches.results) {
+      const song = contributions.find(song => song.id === match.contribution_id);
+      if (!song) continue;
+      const result = JSON.parse(match.result_json);
+      const brief = (track: { id: string; title: string; artist: string }) => ({ id: track.id, title: track.title, artist: track.artist });
+      (song.matches ??= []).push({ provider: match.provider, storefront: match.storefront, status: match.status,
+        method: result.method, selected: result.selected ? brief(result.selected) : null, candidates: result.candidates.slice(0, 3).map(brief) });
+    }
     return { publicCapability: row.public_capability, title: row.title, revision: row.revision, closedAt: row.closed_at, contributions, publications };
   }
 

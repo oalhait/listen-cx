@@ -196,11 +196,34 @@ is capped at 10,000 Threads. These limits do not replace deployment abuse contro
 `D1ThreadStore.getDesiredState(capability, provider)` returns one consistent
 snapshot: website revision/order, every contribution, provider-specific identity
 resolution, and publication status. A source track establishes only its own service's
-identity. Managers may explicitly confirm a counterpart link for the same recording;
-the API verifies that the URL names a real catalog track, while the manager is
-responsible for choosing the correct recording. Confirmations are immutable.
-Legacy identities remain unresolved. Missing identities block the entire provider
-snapshot, preserving duplicates and order instead of silently omitting songs.
+identity. Before publishing, a private matching step looks for the counterpart by
+ISRC, then searches by title and artist. It checks recording version, duration,
+content ratings, and destination playability. Equivalent releases sharing an ISRC
+are grouped; a clear result is selected automatically. Ambiguous results remain
+suggestions in the Thread. Managers can confirm a link to override an automatic
+selection; the API verifies the catalog URL, while the manager verifies the recording.
+Manual confirmations remain immutable. Unverified legacy sources stay unresolved.
+Missing identities block the entire provider snapshot, preserving duplicates and order.
+
+Automatic evidence lives in `automatic_track_matches` (migration `0010`), separately
+from manual confirmations and source links. Each subscriber destination retains its
+own accepted catalog IDs across retries; matching does not change website revisions.
+Five source lookups run per alarm, with subsequent alarms continuing the batch.
+Uncertain results are reused within a revision; an explicit sync retry searches them
+again. Accepted IDs are retained so Apple append journals and retry receipts stay stable.
+
+Metadata matching currently requires normalized title and artist agreement and a
+duration difference of at most the smaller of 3 seconds and 2%. Explicit and clean
+conflicts are rejected. Apple's unrated songs can match Spotify's nonexplicit songs;
+missing Spotify rating information requires review. These thresholds are conservative
+initial choices, not a measured accuracy guarantee. Search is bounded to 25 Apple or
+10 Spotify results. Matching uses the Apple subscriber's stored storefront; Spotify's
+user token determines availability, taking priority over the fallback US market.
+
+Apple catalog reads use an app developer token. Spotify catalog reads use the
+subscriber's Spotify grant, including their own linked Spotify connection when
+matching into Apple. Apple-only listeners fall back to public Spotify track metadata
+and Apple catalog search. No contributor is required to connect both services.
 
 Publication status includes `connected`, `requestedRevision`, `appliedRevision`,
 `pending | blocked | failed | synced`, `blockedReason`, `failureCode`, and verified
@@ -286,9 +309,9 @@ URLs are excluded from invocation logs and traces in staging.
 
 Provider readback is required before reporting a personal playlist synced. Background
 publishing updates the playlist; browser polling refreshes the displayed sync status
-without a page reload. Missing
-cross-provider identities block the entire copy until a manager confirms the matching
-recording. Apple copies support additions; removing/reordering website songs or
+without a page reload. Cross-provider matching runs before publication. If no confident
+match is found, the copy pauses for a manager to review a suggested or manually supplied
+link. Refresh the song list to see matching results. Apple copies support additions; removing/reordering website songs or
 editing the provider playlist can pause their sync. Unsubscribe stops future work;
 an already running provider request may still complete. Resubscribing reuses the
 existing destination rather than making a new playlist.
@@ -300,7 +323,9 @@ existing destination rather than making a new playlist.
 - `src/spotify.ts`: public oEmbed and embed metadata lookup.
 - `src/itunes.ts`: Apple lookup, catalog search, and public-page metadata fallback.
 - `src/fetch.ts`: bounded retries and per-attempt timeouts.
-- `src/resolve.ts`: source-provider metadata only; no match guessing.
+- `src/resolve.ts`: source-provider metadata for short links.
+- `src/music-catalog.ts`, `src/track-matching.ts`: bounded catalog reads and deterministic matching.
+- `src/automatic-matching.ts`: durable per-destination matches before publication.
 - `src/jam.ts`, `src/jam-db.ts`, `src/jams.ts`: capability-secured Jam domain,
   preserved D1 storage, and actions.
 - `src/apple-music-auth.ts`: origin-bound MusicKit developer-token signing.

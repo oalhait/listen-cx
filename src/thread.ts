@@ -12,6 +12,15 @@ export class ThreadError extends Error {
   }
 }
 
+export interface AutomaticMatchSummary {
+  provider: Provider;
+  storefront: string;
+  status: 'matched' | 'ambiguous' | 'unavailable';
+  method: 'isrc' | 'metadata';
+  selected: { id: string; title: string; artist: string } | null;
+  candidates: { id: string; title: string; artist: string }[];
+}
+
 export interface ThreadContribution {
   id: number;
   title: string;
@@ -19,6 +28,7 @@ export interface ThreadContribution {
   artworkUrl: string | null;
   linkSlug: string;
   source: ParsedTrack & { verified: boolean };
+  matches?: AutomaticMatchSummary[];
   counterpart?: ParsedTrack & { confirmed: true };
 }
 
@@ -44,6 +54,7 @@ export interface ThreadView {
 }
 
 export type CatalogIdentity =
+  | { status: "matched"; id: string; storefront: string; method: "isrc" | "metadata" }
   | { status: "verified"; id: string; storefront: string }
   | { status: "unresolved"; reason: "cross_provider_identity_unresolved" | "legacy_source_not_verified" };
 

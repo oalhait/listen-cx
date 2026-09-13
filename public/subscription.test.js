@@ -157,3 +157,8 @@ it('renders independent playlist actions and leaves Apple subscribed when Spotif
     expect(cards.apple.selectors['[data-subscription-playlist]'].href).toBe(appleSubscription.verifiedPlaylistUrl);
   } finally { controller?.stop(); vi.unstubAllGlobals(); }
 });
+
+it('describes bounded matching work as progress rather than a failed playlist', () => {
+  expect(subscriptionMessage({ account: { provider: 'spotify', connected: true }, subscription: { connected: true, status: 'failed', failureCode: 'matching_pending' } }))
+    .toBe('Finding matching songs on Spotify…');
+});

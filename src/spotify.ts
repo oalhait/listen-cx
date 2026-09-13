@@ -7,6 +7,8 @@ export interface SpotifyTrack {
   artist: string;
   durationMs: number;
   artworkUrl: string | null;
+  explicit?: boolean | null;
+  playable?: boolean;
 }
 
 interface SpotifyOEmbed {
@@ -78,6 +80,8 @@ export class SpotifyClient {
       title,
       artist,
       durationMs,
+      explicit: typeof entity.isExplicit === "boolean" ? entity.isExplicit : null,
+      playable: entity.isPlayable === true,
       artworkUrl: artwork ?? preview.thumbnail_url ?? null,
     };
   }

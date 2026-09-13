@@ -8,6 +8,7 @@ import { D1PublicationStore } from "./publication-db.js";
 import { authorizeManagementCapability } from "./thread-security.js";
 import { ThreadPublisher, wakeDue, type RuntimeEnv } from "./thread-publisher.js";
 import type { PublishingSecrets } from "./publishing-bindings.js";
+import { D1AccountStore } from "./account-db.js";
 
 const credentials = {
   SPOTIFY_PUBLISHING_ENABLED: "true", SPOTIFY_CLIENT_ID: "client-id", SPOTIFY_CLIENT_SECRET: "client-secret",
@@ -261,6 +262,215 @@ async function accountFixture(provider: "spotify" | "apple" = "spotify", payload
   return { accountId, stub };
 }
 
+async function matchingThread(sourceProvider: "spotify" | "apple") {
+  const threads = new D1ThreadStore(env.DB);
+  const view = await threads.create("Automatic matching", nanoid(22));
+  const sourceId = sourceProvider === "apple" ? "123456" : "S".repeat(22);
+  await threads.add(view.publicCapability, {
+    expectedRevision: 0, requestKey: "source-song",
+    source: { provider: sourceProvider, id: sourceId, storefront: "us" },
+    track: { title: "Song", artist: "Artist", isrc: null, artworkUrl: null, complete: false,
+      spotifyUrl: sourceProvider === "spotify" ? `https://open.spotify.com/track/${sourceId}` : null,
+      appleUrl: sourceProvider === "apple" ? `https://music.apple.com/us/song/${sourceId}` : null },
+  });
+  return { threads, cap: view.publicCapability, sourceId };
+}
+
+it.each([true, false])("matches an Apple source with the Spotify subscriber token and requires exact final readback: %s", async exactReadback => {
+  const f = await matchingThread("apple");
+  const account = await accountFixture();
+  const unrelated = await accountFixture();
+  await unrelated.stub.setAccountCredentials(unrelated.accountId, "invalid-unrelated-credentials");
+  const accounts = new D1AccountStore(env.DB);
+  const subscription = await accounts.subscribe(account.accountId, f.cap);
+  const destination = env.THREAD_PUBLISHER.getByName(subscription.publisherKey);
+  await configure(destination, { ...credentials, APPLE_DEVELOPER_TOKEN: "catalog-developer" });
+  const selectedId = "M".repeat(22);
+  let marker = "";
+  let reads = 0;
+  let searches = 0;
+  let writes = 0;
+  let refreshes = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
+    const url = new URL(input);
+    const headers = new Headers(init?.headers);
+    if (url.hostname === "accounts.spotify.com") {
+      expect(String(init?.body)).toContain("refresh_token=account-refresh");
+      refreshes++;
+      return Response.json({ token_type: "Bearer", access_token: "listener-spotify", expires_in: 3600 });
+    }
+    if (url.hostname === "api.music.apple.com") {
+      expect(url.pathname).toBe(`/v1/catalog/us/songs/${f.sourceId}`);
+      expect(headers.get("Authorization")).toBe("Bearer catalog-developer");
+      return Response.json({ data: [{ id: f.sourceId, type: "songs", attributes: {
+        name: "Song", artistName: "Artist", durationInMillis: 180000, isrc: "USABC2600001", contentRating: "clean",
+        playParams: { id: f.sourceId, kind: "song" },
+      } }] });
+    }
+    expect(url.hostname).toBe("api.spotify.com");
+    expect(headers.get("Authorization")).toBe("Bearer listener-spotify");
+    if (url.pathname === "/v1/search") {
+      searches++;
+      expect(url.searchParams.get("q")).toBe("isrc:USABC2600001");
+      expect(url.searchParams.get("market")).toBe("US");
+      return Response.json({ tracks: { items: [{ id: selectedId, type: "track", name: "Song", artists: [{ name: "Artist" }],
+        duration_ms: 180000, explicit: false, is_playable: true, external_ids: { isrc: "USABC2600001" } }] } });
+    }
+    if (url.pathname === "/v1/me") return Response.json({ id: account.accountId });
+    if (url.pathname === "/v1/me/playlists") {
+      marker = JSON.parse(String(init?.body)).description;
+      return Response.json({ id: playlistId });
+    }
+    if (url.pathname === `/v1/playlists/${playlistId}`) {
+      return Response.json({ owner: { id: account.accountId }, public: true, description: marker, snapshot_id: "1" });
+    }
+    if (url.pathname === `/v1/playlists/${playlistId}/items`) {
+      expect(await accounts.subscription(account.accountId, f.cap)).toMatchObject({ status: "pending", appliedRevision: null });
+      if (init?.method === "PUT") {
+        writes++;
+        expect(JSON.parse(String(init.body))).toEqual({ uris: [`spotify:track:${selectedId}`] });
+        return Response.json({ snapshot_id: "1" });
+      }
+      reads++;
+      const actualId = exactReadback || reads === 1 ? selectedId : "W".repeat(22);
+      return Response.json({ items: [{ item: { type: "track", uri: `spotify:track:${actualId}` } }], total: 1, next: null });
+    }
+    throw new Error(`Unexpected provider request: ${url}`);
+  }));
+  await destination.wake(subscription.publisherKey);
+  expect(await runDurableObjectAlarm(destination)).toBe(true);
+  expect(await accounts.subscription(account.accountId, f.cap)).toMatchObject(exactReadback
+    ? { status: "synced", appliedRevision: 1, verifiedPlaylistId: playlistId }
+    : { status: "failed", appliedRevision: null, failureCode: "readback_invalid", verifiedPlaylistId: null });
+  expect({ refreshes, searches, writes, reads }).toEqual({ refreshes: 1, searches: 1, writes: 1, reads: 2 });
+  const evidence = await env.DB.prepare("SELECT provider, storefront, status, result_json FROM automatic_track_matches WHERE publisher_key = ?")
+    .bind(subscription.publisherKey).first<{ provider: string; storefront: string; status: string; result_json: string }>();
+  expect(evidence).toMatchObject({ provider: "spotify", storefront: "us", status: "matched" });
+  expect(JSON.parse(evidence!.result_json)).toMatchObject({ method: "isrc", selected: { id: selectedId, provider: "spotify" } });
+  expect((await f.threads.get(f.cap))!.contributions[0]!.source.id).toBe(f.sourceId);
+  expect((await accounts.account(unrelated.accountId))!.credentials).toBe("invalid-unrelated-credentials");
+});
+
+it.each(["none", "valid", "revoked", "source401", "source403", "source429"] as const)("resolves Spotify sources or backs off for an Apple subscriber using their account group and stored storefront: Spotify %s", async spotifyState => {
+  const linkedSpotify = spotifyState !== "none";
+  const sourceIsrc = spotifyState === "valid";
+  const f = await matchingThread("spotify");
+  const accounts = new D1AccountStore(env.DB);
+  const account = await accountFixture("apple", { teamId: "TEAM123456", musicUserToken: "apple-listener", storefront: "us" });
+  const unrelated = await accountFixture();
+  await unrelated.stub.setAccountCredentials(unrelated.accountId, "invalid-unrelated-credentials");
+  if (linkedSpotify) {
+    const spotify = await accountFixture();
+    const sessionHash = crypto.randomUUID();
+    await accounts.createSession(account.accountId, sessionHash, Date.now() + 60000);
+    expect(await accounts.linkAccounts(account.accountId, spotify.accountId, sessionHash)).toBe(true);
+  }
+  const subscription = await accounts.subscribe(account.accountId, f.cap);
+  const destination = env.THREAD_PUBLISHER.getByName(subscription.publisherKey);
+  const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const encoded = btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey))));
+  const secrets = { ...credentials, APPLE_PUBLISHING_ENABLED: "true", APPLE_MUSIC_KEY_ID: "KEY1234567", APPLE_MUSIC_TEAM_ID: "TEAM123456",
+    APPLE_MUSIC_PRIVATE_KEY_P8: `-----BEGIN PRIVATE KEY-----\n${encoded}\n-----END PRIVATE KEY-----` };
+  await configure(account.stub, secrets);
+  await configure(destination, secrets);
+  const selectedId = "987654";
+  let marker = "";
+  let searches = 0;
+  let reads = 0;
+  let creates = 0;
+  let publicReads = 0;
+  let authenticatedSourceReads = 0;
+  let refreshes = 0;
+  let preflights = 0;
+  vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
+    const url = new URL(input);
+    const headers = new Headers(init?.headers);
+    if (url.hostname === "accounts.spotify.com") {
+      expect(linkedSpotify).toBe(true);
+      expect(String(init?.body)).toContain("refresh_token=account-refresh");
+      refreshes++;
+      if (spotifyState === "revoked") return Response.json({ error: "invalid_grant" }, { status: 400 });
+      return Response.json({ token_type: "Bearer", access_token: "linked-listener", expires_in: 3600 });
+    }
+    if (url.hostname === "api.spotify.com") {
+      expect(linkedSpotify).toBe(true);
+      expect(headers.get("Authorization")).toBe("Bearer linked-listener");
+      expect(url.pathname).toBe(`/v1/tracks/${f.sourceId}`);
+      authenticatedSourceReads++;
+      if (spotifyState.startsWith("source")) return Response.json({ error: "source denied" }, { status: Number(spotifyState.slice(6)), headers: { "Retry-After": "120" } });
+      return Response.json({ id: f.sourceId, type: "track", name: "Song", artists: [{ name: "Artist" }],
+        duration_ms: 180000, explicit: true, is_playable: true, external_ids: { isrc: "USABC2600001" } });
+    }
+    if (url.hostname === "open.spotify.com") {
+      expect(sourceIsrc).toBe(false);
+      expect(headers.get("Authorization")).toBeNull();
+      publicReads++;
+      if (url.pathname === "/oembed") return Response.json({ title: "Unreliable oEmbed title" });
+      expect(url.pathname).toBe(`/embed/track/${f.sourceId}`);
+      return new Response(`<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { state: { data: { entity: {
+        id: f.sourceId, type: "track", title: "Song", artists: [{ name: "Artist" }], duration: 180000, isExplicit: true, isPlayable: true,
+      } } } } } })}</script>`);
+    }
+    expect(url.hostname).toBe("api.music.apple.com");
+    expect(headers.get("Authorization")).toMatch(/^Bearer ey[\w-]+\.[\w-]+\.[\w-]+$/);
+    if (url.pathname.startsWith("/v1/catalog/")) {
+      expect(headers.get("Music-User-Token")).toBeNull();
+      expect(url.pathname).toBe(`/v1/catalog/gb/${sourceIsrc ? "songs" : "search"}`);
+      expect(url.searchParams.get(sourceIsrc ? "filter[isrc]" : "term")).toBe(sourceIsrc ? "USABC2600001" : "Song Artist");
+      searches++;
+      const song = { id: selectedId, type: "songs", attributes: { name: "Song", artistName: "Artist", durationInMillis: 180000,
+        contentRating: "explicit", isrc: "USABC2600001", playParams: { id: selectedId, kind: "song" } } };
+      return Response.json(sourceIsrc ? { data: [song] } : { results: { songs: { data: [song] } } });
+    }
+    expect(headers.get("Music-User-Token")).toBe("apple-listener");
+    if (url.pathname === "/v1/me/storefront") {
+      preflights++;
+      return Response.json({ data: [{ id: "gb" }] });
+    }
+    if (url.pathname === "/v1/me/library/playlists") {
+      creates++;
+      expect(init?.method).toBe("POST");
+      const body = JSON.parse(String(init?.body));
+      marker = body.attributes.description;
+      expect(body.relationships.tracks.data).toEqual([{ id: selectedId, type: "songs" }]);
+      return Response.json({ data: [{ id: "p.matched" }] });
+    }
+    if (url.pathname === "/v1/me/library/playlists/p.matched") {
+      return Response.json({ data: [{ id: "p.matched", attributes: { description: marker, isPublic: true, url: "https://music.apple.com/gb/playlist/pl.matched" } }] });
+    }
+    if (url.pathname === "/v1/me/library/playlists/p.matched/tracks") {
+      expect(await accounts.subscription(account.accountId, f.cap)).toMatchObject({ status: "pending", appliedRevision: null });
+      reads++;
+      return Response.json({ data: [{ id: "i.library-song", type: "library-songs", attributes: { playParams: { catalogId: selectedId } } }] });
+    }
+    throw new Error(`Unexpected provider request: ${url}`);
+  }));
+  await account.stub.authorizeAccountApple(account.accountId, "apple-listener");
+  await destination.wake(subscription.publisherKey);
+  expect(await runDurableObjectAlarm(destination)).toBe(true);
+  if (spotifyState === "source429") {
+    expect(await accounts.subscription(account.accountId, f.cap)).toMatchObject({ status: "failed", failureCode: "rate_limited",
+      appliedRevision: null, nextAttemptAt: Date.now() + 120000 });
+    expect({ searches, creates, reads, publicReads }).toEqual({ searches: 0, creates: 0, reads: 0, publicReads: 0 });
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM automatic_track_matches WHERE publisher_key = ?")
+      .bind(subscription.publisherKey).first<number>("count")).toBe(0);
+    return;
+  }
+  expect(await accounts.subscription(account.accountId, f.cap)).toMatchObject({ status: "synced", appliedRevision: 1,
+    verifiedPlaylistId: "p.matched", verifiedPlaylistUrl: "https://music.apple.com/gb/playlist/pl.matched" });
+  expect({ searches, creates, reads, preflights, publicReads, authenticatedSourceReads, refreshes }).toEqual({ searches: 1, creates: 1, reads: 2,
+    preflights: 1, publicReads: sourceIsrc ? 0 : 2, authenticatedSourceReads: linkedSpotify && spotifyState !== "revoked" ? 1 : 0, refreshes: linkedSpotify ? 1 : 0 });
+  const evidence = await env.DB.prepare("SELECT storefront, status, result_json FROM automatic_track_matches WHERE publisher_key = ?")
+    .bind(subscription.publisherKey).first<{ storefront: string; status: string; result_json: string }>();
+  expect(evidence).toMatchObject({ storefront: "gb", status: "matched" });
+  expect(JSON.parse(evidence!.result_json)).toMatchObject({ method: sourceIsrc ? "isrc" : "metadata", selected: { provider: "apple", id: selectedId, explicit: true } });
+  expect((await accounts.account(unrelated.accountId))!.credentials).toBe("invalid-unrelated-credentials");
+  await runInDurableObject(destination, async (_, state) => {
+    expect(await state.storage.get(`apple:${subscription.publisherKey}`)).toMatchObject({ appliedRevision: 1, appliedTrackIds: [selectedId], intent: null,
+      verifiedUrl: "https://music.apple.com/gb/playlist/pl.matched" });
+  });
+});
+
 it("serializes account refreshes across subscriptions and persists rotated encrypted tokens", async () => {
   const { accountId, stub } = await accountFixture();
   const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
@@ -365,7 +575,8 @@ it("publishes separate subscriber destinations with only their own account token
     await stub.wake(key);
     await runDurableObjectAlarm(stub);
   }
-  const rows = await env.DB.prepare("SELECT account_id, status, verified_playlist_id FROM thread_subscriptions ORDER BY verified_playlist_id").all();
+  const rows = await env.DB.prepare("SELECT account_id, status, verified_playlist_id FROM thread_subscriptions WHERE account_id IN (?, ?) ORDER BY verified_playlist_id")
+    .bind(first.accountId, second.accountId).all();
   expect(rows.results).toEqual([
     { account_id: first.accountId, status: "synced", verified_playlist_id: "0".repeat(22) },
     { account_id: second.accountId, status: "synced", verified_playlist_id: "1".repeat(22) },

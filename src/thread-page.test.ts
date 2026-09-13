@@ -57,6 +57,7 @@ it("distinguishes pending, failed, unresolved, and verified sync without exposin
   const publication = { ...view.publications[0]!, connected: true };
   const page = (patch: Partial<typeof publication>) => threadPage({ ...view, publications: [{ ...publication, ...patch }] }, false);
   expect(page({ status: "pending" })).toContain("Waiting to sync");
+  expect(page({ status: "failed", failureCode: "matching_pending" })).toContain("Finding matching songs");
   expect(page({ status: "failed", failureCode: "provider_secret_failure" })).toContain("Sync failed");
   expect(page({ status: "failed", failureCode: "provider_secret_failure" })).not.toContain("provider_secret_failure");
   expect(page({ blockedReason: "cross_provider_identity_unresolved" })).toContain("Some songs still need a verified match");
@@ -92,7 +93,7 @@ it("offers explicit counterpart confirmation to managers when a connected app is
   expect(page).toContain('data-identify="1"');
   expect(page).toContain("same recording");
   expect(page).toContain("Add Apple Music link");
-  expect(page).toContain("only needed to sync this song to Apple Music");
+  expect(page).toContain("automatically when someone subscribes on Apple Music");
   expect(page).not.toContain("Confirm Apple Music version");
   expect(page).toContain('type="checkbox"');
   expect(page).not.toContain('data-remove="1"');
@@ -118,4 +119,20 @@ it("shows a personal subscription and account settings instead of shared provide
   expect(page).not.toContain('Waiting to sync');
   expect(page).toContain('data-identify="1"');
   expect(threadPage(view, false, [], true)).not.toContain('data-identify=');
+});
+
+it('shows automatic counterparts and keeps uncertain suggestions separate from confirmation', () => {
+  const song = view.contributions[0]!;
+  const matched = { provider: 'apple' as const, storefront: 'us', status: 'matched' as const, method: 'metadata' as const,
+    selected: { id: '123', title: 'Song', artist: 'Artist' }, candidates: [] };
+  const page = threadPage({ ...view, contributions: [{ ...song, matches: [matched] }] }, true, [], true);
+  expect(page).toContain('Matched on Apple Music');
+  expect(page).toContain('https://music.apple.com/us/song/123');
+  expect(page).toContain('Change Apple Music match');
+  const uncertain = threadPage({ ...view, contributions: [{ ...song, matches: [{ ...matched, status: 'ambiguous', selected: null,
+    candidates: [{ id: '456', title: '<Live>', artist: 'Artist' }] }] }] }, true, [], true);
+  expect(uncertain).toContain('Review Apple Music match');
+  expect(uncertain).toContain('&lt;Live&gt;');
+  expect(uncertain).not.toContain('Matched on Apple Music');
+  expect(uncertain).toContain('https://music.apple.com/us/song/456');
 });

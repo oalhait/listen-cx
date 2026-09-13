@@ -1,6 +1,6 @@
-import { D1PublicationStore } from "./publication-db.js";
+import { D1PublicationStore, type PublicationTarget } from "./publication-db.js";
 import { D1ThreadStore } from "./thread-db.js";
-import { desiredState } from "./thread.js";
+import { desiredState, type ThreadView, type DesiredState } from "./thread.js";
 import type { Provider } from "./urls.js";
 
 export type PublicationInput = { playlistKey: string; title: string; revision: number; trackIds: string[] };
@@ -9,6 +9,7 @@ export type ProviderPublishers = Partial<Record<Provider, (input: PublicationInp
 
 function failure(error: unknown): { code: string; blocked: boolean; delay: number } {
   const value = error as { code?: unknown; status?: unknown; retryAfterSeconds?: unknown } | null;
+  if (value?.code === "matching_pending") return { code: "matching_pending", blocked: false, delay: 1000 };
   if (value?.status === 429) return { code: "rate_limited", blocked: false,
     delay: typeof value.retryAfterSeconds === "number" && Number.isFinite(value.retryAfterSeconds) && value.retryAfterSeconds > 0
       ? Math.max(60000, value.retryAfterSeconds * 1000) : 60000 };
@@ -18,7 +19,9 @@ function failure(error: unknown): { code: string; blocked: boolean; delay: numbe
   return { code: value?.code === "readback_invalid" ? "readback_invalid" : "provider_unavailable", blocked: false, delay: 60000 };
 }
 
-export async function runPublication(db: D1Database, publisherKey: string, publishers: ProviderPublishers): Promise<number | null> {
+export type IdentityResolver = (view: ThreadView, target: PublicationTarget) => Promise<DesiredState>;
+
+export async function runPublication(db: D1Database, publisherKey: string, publishers: ProviderPublishers, resolve?: IdentityResolver): Promise<number | null> {
   const publications = new D1PublicationStore(db);
   const target = await publications.target(publisherKey);
   if (!target) return null;
@@ -26,17 +29,27 @@ export async function runPublication(db: D1Database, publisherKey: string, publi
   const threads = new D1ThreadStore(db);
   const view = await threads.get(target.capability);
   if (!view) return null;
-  const desired = desiredState(view, target.provider);
+  let desired = desiredState(view, target.provider);
   if (target.status === "synced" && target.appliedRevision === desired.revision) return null;
   const publish = publishers[target.provider];
-  if (!publish || !desired.identitiesComplete) {
-    await publications.failed(publisherKey, desired.revision, publish ? "identities_incomplete" : "publisher_not_authorized", true, 0);
+  if (!publish) {
+    await publications.failed(publisherKey, desired.revision, "publisher_not_authorized", true, 0);
     return null;
   }
   try {
+    if (!desired.identitiesComplete && resolve) {
+      desired = await resolve(view, target);
+      const current = await threads.get(target.capability);
+      if (!current) return null;
+      if (current.revision !== desired.revision) return Date.now() + 1;
+    }
+    if (!desired.identitiesComplete) {
+      await publications.failed(publisherKey, desired.revision, "identities_incomplete", true, 0);
+      return null;
+    }
     const result = await publish({ playlistKey: publisherKey, title: desired.title, revision: desired.revision,
       trackIds: desired.entries.map(entry => {
-        if (entry.identity.status !== "verified") throw new Error("identities_incomplete");
+        if (entry.identity.status === "unresolved") throw new Error("identities_incomplete");
         return entry.identity.id;
       }) });
     if (result.revision !== desired.revision) throw { code: "readback_invalid" };

@@ -156,11 +156,16 @@ export class D1AccountStore {
   }
 
   async retry(accountId: string, capability: string): Promise<void> {
-    await this.db.withSession("first-primary").prepare(`UPDATE thread_subscriptions SET status = 'pending',
-      blocked_reason = NULL, failure_code = NULL, updated_at = datetime('now')
-      WHERE account_id = ? AND connected = 1 AND status != 'synced'
-      AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
-      .bind(accountId, capability).run();
+    const db = this.db.withSession("first-primary");
+    await db.batch([
+      db.prepare(`DELETE FROM automatic_track_matches WHERE status != 'matched' AND publisher_key IN (
+        SELECT publisher_key FROM thread_subscriptions WHERE account_id = ? AND connected = 1 AND status != 'synced'
+        AND thread_id = (SELECT id FROM threads WHERE public_capability = ?))`).bind(accountId, capability),
+      db.prepare(`UPDATE thread_subscriptions SET status = 'pending', blocked_reason = NULL, failure_code = NULL,
+        updated_at = datetime('now') WHERE account_id = ? AND connected = 1 AND status != 'synced'
+        AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
+        .bind(accountId, capability),
+    ]);
   }
 
   async unsubscribe(accountId: string, capability: string): Promise<void> {

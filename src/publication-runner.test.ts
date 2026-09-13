@@ -4,6 +4,7 @@ import { nanoid } from "nanoid";
 import { D1ThreadStore } from "./thread-db.js";
 import { D1PublicationStore } from "./publication-db.js";
 import { authorizeManagementCapability } from "./thread-security.js";
+import { desiredState } from "./thread.js";
 import { runPublication } from "./publication-runner.js";
 
 async function setup() {
@@ -104,4 +105,34 @@ it("isolates subscriber provider failures and preserves newer website revisions"
   await publications.failed(second, 1, "stale", false, Date.now() + 60000);
   expect(await publications.target(second)).toMatchObject({ status: "synced", appliedRevision: 2 });
   expect(await publications.target(first)).toMatchObject({ status: "pending", appliedRevision: null, requestedRevision: 2 });
+});
+
+it('resolves missing counterparts before publishing and retries transient matching failures', async () => {
+  const { threads, target, cap } = await setup();
+  await threads.add(cap, { expectedRevision: 1, requestKey: 'song', source: { provider: 'apple', id: '123', storefront: 'us' }, track: { title: 'Song', artist: 'Artist', artworkUrl: null, isrc: null, complete: false, spotifyUrl: null, appleUrl: 'https://music.apple.com/us/song/123' } });
+  const publish = vi.fn(async () => ({ ...output, revision: 2 }));
+  const resolve = vi.fn(async (view: import('./thread.js').ThreadView) => ({ ...desiredState(view, 'spotify'), identitiesComplete: true,
+    entries: [{ contributionId: view.contributions[0]!.id, title: 'Song', artist: 'Artist', identity: { status: 'matched' as const, id, storefront: 'us', method: 'isrc' as const } }] }));
+  await runPublication(env.DB, target.publisherKey, { spotify: publish }, resolve);
+  expect(publish).toHaveBeenCalledWith(expect.objectContaining({ trackIds: [id], revision: 2 }));
+  expect((await threads.get(cap))!.publications.find(p => p.provider === 'spotify')).toMatchObject({ status: 'synced', appliedRevision: 2 });
+});
+
+it('does not publish a snapshot changed while matching and schedules the newest revision', async () => {
+  const { threads, auth, target, cap } = await setup();
+  await threads.add(cap, { expectedRevision: 1, requestKey: 'song', source: { provider: 'apple', id: '123', storefront: 'us' }, track: { title: 'Song', artist: 'Artist', artworkUrl: null, isrc: null, complete: false, spotifyUrl: null, appleUrl: 'https://music.apple.com/us/song/123' } });
+  const publish = vi.fn();
+  const retry = await runPublication(env.DB, target.publisherKey, { spotify: publish }, async view => {
+    await threads.manage(auth, { kind: 'close', expectedRevision: 2, requestKey: 'close' });
+    return desiredState(view, 'spotify');
+  });
+  expect(retry).toBeTypeOf('number');
+  expect(publish).not.toHaveBeenCalled();
+});
+
+it('backs off catalog rate limits without marking the song unavailable', async () => {
+  const { threads, target, cap } = await setup();
+  await threads.add(cap, { expectedRevision: 1, requestKey: 'song', source: { provider: 'apple', id: '123', storefront: 'us' }, track: { title: 'Song', artist: 'Artist', artworkUrl: null, isrc: null, complete: false, spotifyUrl: null, appleUrl: 'https://music.apple.com/us/song/123' } });
+  expect(await runPublication(env.DB, target.publisherKey, { spotify: vi.fn() }, async () => { throw { status: 429, retryAfterSeconds: 120 }; })).toBeGreaterThanOrEqual(Date.now() + 119000);
+  expect((await threads.get(cap))!.publications.find(p => p.provider === 'spotify')).toMatchObject({ status: 'failed', failureCode: 'rate_limited' });
 });

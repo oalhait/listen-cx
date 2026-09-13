@@ -73,10 +73,10 @@ export class MusicConnectionStore {
     return tokens.accessToken;
   }
 
-  async appleCredentials(): Promise<{ developerToken: string; musicUserToken: string }> {
+  async appleCredentials(): Promise<{ developerToken: string; musicUserToken: string; storefront: string }> {
     const account = await this.read<AppleAccount>("apple-account");
     if (!account || account.teamId !== this.env.APPLE_MUSIC_TEAM_ID) throw new MusicAuthError("authorization_required", 401);
-    return { developerToken: await appleDeveloperToken(this.env), musicUserToken: account.musicUserToken };
+    return { developerToken: await appleDeveloperToken(this.env), musicUserToken: account.musicUserToken, storefront: account.storefront };
   }
 
   private async read<T>(name: string): Promise<T | undefined> {
