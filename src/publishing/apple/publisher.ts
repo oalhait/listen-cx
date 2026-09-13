@@ -174,7 +174,19 @@ export class ApplePublisher {
         throw new PublishingError("invalid_provider_response", 502);
       }
       visited.add(target.href);
-      const result = await this.request(target.pathname + target.search);
+      let result;
+      try { result = await this.request(target.pathname + target.search); }
+      catch (error) {
+        if (page !== 0 || !(error instanceof PublishingError) || error.status !== 404) throw error;
+        // Apple can return 404 for an empty playlist's direct tracks relationship.
+        const included = (await this.request(`${base}?include=tracks`))?.data?.[0];
+        const description = included?.attributes?.description;
+        const tracks = included?.relationships?.tracks;
+        if (included?.id !== row.providerPlaylistId
+          || (typeof description === "string" ? description : description?.standard) !== row.marker
+          || !Array.isArray(tracks?.data) || tracks.data.length !== 0 || tracks.meta?.total !== 0 || tracks.next) throw error;
+        result = { data: [] };
+      }
       if (!Array.isArray(result?.data)) throw new PublishingError("invalid_provider_response", 502);
       for (const entry of result.data) {
         const id = entry?.attributes?.playParams?.catalogId;

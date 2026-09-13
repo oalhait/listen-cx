@@ -54,6 +54,64 @@ function fixture() {
 }
 
 describe("ApplePublisher", () => {
+  it.each([false, true])("recovers an empty creation from explicit playlist tracks before appending to the same playlist, pending: %s", async pending => {
+    const f = fixture();
+    let empty = true;
+    let provideEvidence = !pending;
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if ((init?.method ?? "GET") === "GET" && url.pathname.endsWith("/tracks") && empty) return new Response(null, { status: 404 });
+      if (init?.method === "POST" && url.pathname.endsWith("/tracks")) empty = false;
+      const response = await f.fetcher(input, init);
+      if (url.searchParams.get("include") === "tracks" && provideEvidence) {
+        const data = await response.json() as any;
+        data.data[0].relationships.tracks = { data: [], meta: { total: 0 } };
+        return Response.json(data);
+      }
+      return response;
+    }) as typeof fetch;
+    const publisher = () => new ApplePublisher({ store: f.store, fetcher,
+      credentials: async () => ({ developerToken: "private-developer-token", musicUserToken: "private-user-token" }) });
+    if (pending) await expect(publisher().reconcile(desired([]))).rejects.toMatchObject({ status: 404 });
+    else expect(await publisher().reconcile(desired([]))).toMatchObject({ providerPlaylistId: "p.created", appliedTrackIds: [], appliedRevision: 0 });
+    provideEvidence = true;
+    expect(await publisher().reconcile(desired(["11", "11", "22"], 1))).toMatchObject({ providerPlaylistId: "p.created", appliedTrackIds: ["11", "11", "22"], appliedRevision: 1 });
+    expect(f.calls.filter(call => call.method === "POST").map(call => call.path)).toEqual([
+      "/v1/me/library/playlists", "/v1/me/library/playlists/p.created/tracks",
+    ]);
+  });
+
+  it.each([
+    { tracks: { data: [], meta: { total: 1 } } },
+    { tracks: { data: [], next: "/v1/me/library/playlists/p.created/tracks?offset=1", meta: { total: 0 } } },
+    { tracks: { data: [] } },
+    { tracks: { data: [{ id: "i.11" }], meta: { total: 0 } } },
+    { tracks: null },
+    { tracks: { data: [], meta: { total: 0 } }, id: "p.other" },
+    { tracks: { data: [], meta: { total: 0 } }, description: "another playlist" },
+  ])("does not infer empty tracks from a 404 without complete zero-track evidence: %j", async evidence => {
+    const f = fixture();
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if ((init?.method ?? "GET") === "GET" && url.pathname.endsWith("/tracks")) return new Response(null, { status: 404 });
+      const response = await f.fetcher(input, init);
+      if (url.searchParams.get("include") === "tracks") {
+        const data = await response.json() as any;
+        data.data[0].relationships.tracks = evidence.tracks;
+        if ("id" in evidence) data.data[0].id = evidence.id;
+        if ("description" in evidence) data.data[0].attributes.description = evidence.description;
+        return Response.json(data);
+      }
+      return response;
+    }) as typeof fetch;
+    const publisher = new ApplePublisher({ store: f.store, fetcher,
+      credentials: async () => ({ developerToken: "private-developer-token", musicUserToken: "private-user-token" }) });
+    await expect(publisher.reconcile(desired([]))).rejects.toMatchObject({ code: "provider_error", status: 404 });
+    await expect(publisher.reconcile(desired(["11"], 1))).rejects.toMatchObject({ code: "provider_error", status: 404 });
+    expect(f.calls.filter(call => call.method === "POST")).toHaveLength(1);
+    expect(f.rows.get("thread-one")?.appliedRevision).toBeNull();
+  });
+
   it("creates a public playlist at revision zero and preserves exact ordered duplicates", async () => {
     const f = fixture();
     const result = await f.publisher().reconcile(desired());
