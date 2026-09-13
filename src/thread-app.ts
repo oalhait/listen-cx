@@ -2,8 +2,9 @@ import { Hono, type Context } from "hono";
 import { readBoundedJson, isRecord } from "./request.js";
 import type { Resolver } from "./resolve.js";
 import type { D1ThreadStore } from "./thread-db.js";
+import type { ThreadCollaborationService } from "./thread-collaboration-service.js";
 import { parseTrackUrl, type Provider } from "./urls.js";
-import { ThreadError, mutationFingerprint, verifiedSource, type ManagementIntent, type MutationRequest } from "./thread.js";
+import { ThreadError, mutationFingerprint, normalizeRequestKey, sha256, verifiedSource, type ManagementIntent, type MutationRequest } from "./thread.js";
 import { authorizeManagementCapability, isSameOriginAction, managementCookie, setManagementCookie, THREAD_SECURITY_HEADERS, type ManagementAuthorization } from "./thread-security.js";
 import { threadCreationPage, threadPage } from "./thread-page.js";
 
@@ -31,7 +32,7 @@ export interface ThreadPublishing {
   requireConnection?: (authorization: ManagementAuthorization, provider: Provider) => Promise<void>;
 }
 
-export function createThreadApp({ resolver, store, baseUrl, publishing, history, contributor }: { contributor?: (c: Context) => Promise<{ id: string } | null>; resolver: Pick<Resolver, "resolve">; store: D1ThreadStore; baseUrl: string; publishing?: ThreadPublishing; history?: { remember(c: Context, capability: string): Promise<void>; prepare?(c: Context): Promise<void> } }) {
+export function createThreadApp({ resolver, store, baseUrl, publishing, history, contributor, collaboration }: { contributor?: (c: Context) => Promise<{ id: string } | null>; resolver: Pick<Resolver, "resolve">; store: D1ThreadStore; baseUrl: string; publishing?: ThreadPublishing; history?: { remember(c: Context, capability: string): Promise<void>; prepare?(c: Context): Promise<void> }; collaboration?: ThreadCollaborationService }) {
   const app = new Hono();
   for (const path of ["/threads/new", "/t/*", "/api/threads", "/api/threads/*"]) {
     app.use(path, async (c, next) => {
@@ -55,6 +56,24 @@ export function createThreadApp({ resolver, store, baseUrl, publishing, history,
     const secret = managementCookie(c, capability);
     return secret ? authorizeManagementCapability(store, capability, secret) : null;
   };
+  const collaborationSnapshot = async (c: Context, capability: string) => {
+    if (!collaboration) throw new ThreadError(404, "not_found", "Jam collaboration is not available.");
+    const snapshot = await collaboration.snapshot(c, capability);
+    if (!snapshot) throw new ThreadError(404, "not_found", "Thread not found.");
+    return snapshot;
+  };
+  const collaborationSnapshotFor = async (capability: string, identity: NonNullable<Awaited<ReturnType<ThreadCollaborationService["identity"]>>>) => {
+    if (!collaboration) throw new ThreadError(404, "not_found", "Jam collaboration is not available.");
+    const snapshot = await collaboration.store.snapshot(capability, identity);
+    if (!snapshot) throw new ThreadError(404, "not_found", "Thread not found.");
+    return snapshot;
+  };
+  const collaborationJson = async (c: Context, capability: string) => {
+    const snapshot = await collaborationSnapshot(c, capability);
+    const etag = `"${await sha256(JSON.stringify(snapshot))}"`;
+    c.header("ETag", etag);
+    return c.req.header("If-None-Match") === etag ? c.body(null, 304) : c.json(snapshot);
+  };
 
   app.get("/threads/new", async c => {
     await history?.prepare?.(c);
@@ -70,13 +89,71 @@ export function createThreadApp({ resolver, store, baseUrl, publishing, history,
     return c.json({ thread, publicUrl, managementUrl: `${publicUrl}#manage=${body.creationKey}` }, 201);
   });
   app.get("/api/threads/:capability", async c => c.json(await view(c.req.param("capability"))));
+  app.get("/api/threads/:capability/collaboration", async c => collaborationJson(c, c.req.param("capability")));
   app.get("/t/:capability", async c => {
     const capability = c.req.param("capability");
     const thread = await store.get(capability);
     if (!thread) return c.html(threadPage(null, false, [], false, baseUrl), 404);
+    await collaboration?.identity(c, true);
     const managed = Boolean(await authorization(c, capability));
     if (managed) await history?.remember(c, capability);
     return c.html(threadPage(thread, managed, publishing?.availableProviders, publishing?.accountSubscriptions, baseUrl));
+  });
+  app.post("/api/threads/:capability/collaboration/join", async c => {
+    if (!collaboration) throw new ThreadError(404, "not_found", "Jam collaboration is not available.");
+    const capability = c.req.param("capability");
+    const body = await bodyFields(c, ["displayName"]);
+    if (typeof body.displayName !== "string") throw new ThreadError(400, "invalid_display_name", "Choose a display name.");
+    const identity = await collaboration.identity(c, true);
+    if (!identity) throw new ThreadError(401, "join_required", "Join this Jam first.");
+    const result = await collaboration.store.join(capability, identity, body.displayName);
+    return c.json({ ...result, collaboration: await collaborationSnapshotFor(capability, identity) });
+  });
+  app.post("/api/threads/:capability/messages", async c => {
+    if (!collaboration) throw new ThreadError(404, "not_found", "Jam collaboration is not available.");
+    const capability = c.req.param("capability");
+    const body = await bodyFields(c, ["text", "requestKey"]);
+    if (typeof body.text !== "string" || typeof body.requestKey !== "string") {
+      throw new ThreadError(400, "invalid_input", "Send a message and request key.");
+    }
+    const identity = await collaboration.identity(c);
+    if (!identity) throw new ThreadError(401, "join_required", "Join this Jam before chatting.");
+    const result = await collaboration.store.postMessage(capability, identity, {
+      text: body.text,
+      requestKey: body.requestKey,
+    });
+    return c.json({ ...result, collaboration: await collaborationSnapshotFor(capability, identity) });
+  });
+  app.post("/api/threads/:capability/votes", async c => {
+    if (!collaboration) throw new ThreadError(404, "not_found", "Jam collaboration is not available.");
+    const capability = c.req.param("capability");
+    const body = await bodyFields(c, ["contributionId", "vote", "requestKey"]);
+    if (!Number.isSafeInteger(body.contributionId) || Number(body.contributionId) < 1
+      || !["up", "down", "clear"].includes(String(body.vote)) || typeof body.requestKey !== "string") {
+      throw new ThreadError(400, "invalid_vote", "Choose an active song and a supported vote.");
+    }
+    const identity = await collaboration.identity(c);
+    if (!identity) throw new ThreadError(401, "join_required", "Join this Jam before voting.");
+    const result = await collaboration.store.setVote(capability, identity, {
+      contributionId: Number(body.contributionId),
+      vote: body.vote as "up" | "down" | "clear",
+      requestKey: body.requestKey,
+    });
+    return c.json({ ...result, collaboration: await collaborationSnapshotFor(capability, identity) });
+  });
+  app.post("/t/:capability/manage/messages", async c => {
+    if (!collaboration) throw new ThreadError(404, "not_found", "Jam collaboration is not available.");
+    const capability = c.req.param("capability");
+    const authorized = await authorization(c, capability);
+    if (!authorized) throw new ThreadError(403, "forbidden", "Open the private management link to moderate this Jam.");
+    const body = await bodyFields(c, ["messageId", "requestKey"]);
+    if (!Number.isSafeInteger(body.messageId) || Number(body.messageId) < 1 || typeof body.requestKey !== "string") {
+      throw new ThreadError(400, "invalid_input", "Choose a message to remove.");
+    }
+    normalizeRequestKey(body.requestKey);
+    const status = await collaboration.store.moderateMessage(authorized, Number(body.messageId));
+    if (status === "not_found") throw new ThreadError(404, "message_not_found", "Message not found.");
+    return c.json({ status, collaboration: await collaborationSnapshot(c, capability) });
   });
   app.post("/api/threads/:capability/contributions", async c => {
     const capability = c.req.param("capability");
@@ -84,8 +161,22 @@ export function createThreadApp({ resolver, store, baseUrl, publishing, history,
     const request = requestFields(body);
     const parsed = typeof body.url === "string" ? parseTrackUrl(body.url) : null;
     if (!parsed || typeof body.url !== "string") throw new ThreadError(400, "invalid_track", "Send a direct Spotify or Apple Music track link.");
-    const addedByAccountId = (await contributor?.(c))?.id ?? null;
-    const fingerprint = await mutationFingerprint({ kind: "add", source: parsed, addedByAccountId });
+    let addedByAccountId = (await contributor?.(c))?.id ?? null;
+    let addedByParticipantId: string | null = null;
+    if (!addedByAccountId && collaboration) {
+      const identity = await collaboration.identity(c);
+      if (identity?.kind === "account") {
+        addedByAccountId = identity.accountId;
+      } else if (identity) {
+        addedByParticipantId = (await collaboration.store.participant(capability, identity))?.id ?? null;
+      }
+    }
+    const fingerprint = await mutationFingerprint({
+      kind: "add",
+      source: parsed,
+      addedByAccountId,
+      addedByParticipantId,
+    });
     const replay = await store.preflight(capability, request.requestKey, fingerprint, request.expectedRevision);
     if (replay) {
       publishing?.onChange(capability);
@@ -96,7 +187,13 @@ export function createThreadApp({ resolver, store, baseUrl, publishing, history,
     catch { throw new ThreadError(502, "provider_unavailable", "The music app is unavailable. Try again."); }
     if (!track) throw new ThreadError(404, "track_not_found", "Track not found. Try another track link.");
     const source = verifiedSource(body.url, track);
-    const receipt = await store.add(capability, { ...request, source, track, addedByAccountId });
+    const receipt = await store.add(capability, {
+      ...request,
+      source,
+      track,
+      addedByAccountId,
+      addedByParticipantId,
+    });
     publishing?.onChange(capability);
     return c.json({ receipt, thread: await view(capability) });
   });

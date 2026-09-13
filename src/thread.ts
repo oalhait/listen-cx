@@ -22,6 +22,11 @@ export interface AutomaticMatchSummary {
   candidates: { id: string; title: string; artist: string }[];
 }
 
+export interface ThreadContributionAttribution extends PublicProfile {
+  /** Present only for an anonymous Jam participant; this is an opaque public id. */
+  participantId?: string;
+}
+
 export interface ThreadContribution {
   id: number;
   title: string;
@@ -30,7 +35,7 @@ export interface ThreadContribution {
   linkSlug: string;
   source: ParsedTrack & { verified: boolean };
   matches?: AutomaticMatchSummary[];
-  addedBy?: PublicProfile | null;
+  addedBy?: ThreadContributionAttribution | null;
   counterpart?: ParsedTrack & { confirmed: true };
 }
 
@@ -51,6 +56,10 @@ export interface ThreadView {
   title: string;
   revision: number;
   closedAt: string | null;
+  /** Present on durable snapshots; optional for callers constructing test projections. */
+  createdAt?: string;
+  /** Includes removed songs and is therefore distinct from contributions.length. */
+  totalContributions?: number;
   contributions: ThreadContribution[];
   publications: PublicationStatus[];
 }
@@ -77,7 +86,12 @@ export interface MutationRequest {
 }
 
 export type ManagementIntent = { kind: "remove"; id: number } | { kind: "reorder"; ids: number[] } | { kind: "close" } | { kind: "connect"; provider: Provider } | { kind: "identify"; id: number; identity: ParsedTrack };
-export type MutationIntent = ManagementIntent | { kind: "add"; source: ParsedTrack; addedByAccountId?: string | null };
+export type MutationIntent = ManagementIntent | {
+  kind: "add";
+  source: ParsedTrack;
+  addedByAccountId?: string | null;
+  addedByParticipantId?: string | null;
+};
 export interface MutationReceipt { revision: number; replayed: boolean }
 
 export function isThreadCapability(value: string): boolean {
@@ -110,8 +124,15 @@ export async function sha256(value: string): Promise<string> {
 }
 
 export function mutationFingerprint(intent: MutationIntent): Promise<string> {
-  if (intent.kind === "add") return sha256(JSON.stringify(["add", intent.source.provider, intent.source.id, intent.source.storefront,
-    ...(intent.addedByAccountId ? [intent.addedByAccountId] : [])]));
+  if (intent.kind === "add") {
+    if (intent.addedByAccountId && intent.addedByParticipantId) {
+      throw new ThreadError(400, "invalid_participant", "A song can have only one contributor.");
+    }
+    return sha256(JSON.stringify(["add", intent.source.provider, intent.source.id, intent.source.storefront,
+      ...(intent.addedByAccountId
+        ? [intent.addedByAccountId]
+        : intent.addedByParticipantId ? ["participant", intent.addedByParticipantId] : [])]));
+  }
   if (intent.kind === "identify") return sha256(JSON.stringify(["identify", intent.id, intent.identity.provider, intent.identity.id, intent.identity.storefront]));
   if (intent.kind === "remove") return sha256(JSON.stringify(["remove", intent.id]));
   if (intent.kind === "reorder") return sha256(JSON.stringify(["reorder", intent.ids]));

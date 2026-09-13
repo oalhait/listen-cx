@@ -2,19 +2,18 @@ import { Hono, type Context } from "hono";
 import { readBoundedJson, isRecord } from "./request.js";
 import { createThreadApp, type ThreadPublishing } from "./thread-app.js";
 import type { D1ThreadStore } from "./thread-db.js";
+import type { ThreadCollaborationService } from "./thread-collaboration-service.js";
 import type { Resolver } from "./resolve.js";
 import type { LinkStore } from "./db.js";
 import { prefersHtml, renderRecipient } from "./recipient.js";
-import type { JamStore } from "./jam-db.js";
 import { createLink, LinkActionError, LINK_SLUG_PATTERN } from "./links.js";
 import { handleMcpRequest } from "./mcp.js";
 import type { AppleMusicDeveloperToken } from "./apple-music-auth.js";
 import { getJam, JamActionError } from "./jams.js";
 
-export function createApp({ resolver, store, jamStore, jamsEnabled = false, baseUrl, appleMusic, threadStore, publishing, connections, history, contributor }: {
+export function createApp({ resolver, store, jamsEnabled = false, baseUrl, appleMusic, threadStore, publishing, connections, history, contributor, collaboration }: {
   resolver: Pick<Resolver, "resolve">;
   store: LinkStore;
-  jamStore?: JamStore;
   jamsEnabled?: boolean;
   baseUrl: string;
   appleMusic?: {
@@ -22,6 +21,7 @@ export function createApp({ resolver, store, jamStore, jamsEnabled = false, base
     issueDeveloperToken(): Promise<AppleMusicDeveloperToken>;
   };
   threadStore?: D1ThreadStore;
+  collaboration?: ThreadCollaborationService;
   contributor?: (c: Context) => Promise<{ id: string } | null>;
   publishing?: ThreadPublishing;
   connections?: Hono;
@@ -37,11 +37,12 @@ export function createApp({ resolver, store, jamStore, jamsEnabled = false, base
 
   app.get("/healthz", async (c) => {
     try {
-      const [linksReady, jamsReady] = await Promise.all([
+      const [linksReady, threadsReady, collaborationReady] = await Promise.all([
         store.isReady(),
-        jamsEnabled && jamStore ? jamStore.isReady() : Promise.resolve(true),
+        threadStore ? threadStore.isReady() : Promise.resolve(true),
+        collaboration ? collaboration.store.isReady() : Promise.resolve(true),
       ]);
-      if (linksReady && jamsReady) return c.json({ status: "ok" });
+      if (linksReady && threadsReady && collaborationReady) return c.json({ status: "ok" });
     } catch {}
     return c.json({ status: "unavailable" }, 503);
   });
@@ -87,21 +88,24 @@ export function createApp({ resolver, store, jamStore, jamsEnabled = false, base
     }
   });
 
-  if (jamStore) app.all("/mcp", (c) => handleMcpRequest(c.req.raw, {
+  if (threadStore && collaboration) app.all("/mcp", (c) => handleMcpRequest(c.req.raw, {
     resolver,
     store,
-    jamStore,
+    threadStore,
+    collaborationStore: collaboration.store,
     jamsEnabled,
     baseUrl,
+    onJamChange: publishing?.onChange,
   }));
 
   app.get("/api/jams/:jamId", async (c) => {
-    if (!jamsEnabled || !jamStore) return c.json({ error: "Not found." }, 404);
+    if (!jamsEnabled || !threadStore || !collaboration) return c.json({ error: "Not found." }, 404);
     c.header("Cache-Control", "private, no-store");
     c.header("Referrer-Policy", "no-referrer");
     c.header("X-Robots-Tag", "noindex, nofollow, noarchive");
     try {
-      return c.json(await getJam({ resolver, store, jamStore, jamsEnabled, baseUrl }, c.req.param("jamId")));
+      return c.json(await getJam({ resolver, store, threadStore, collaborationStore: collaboration.store,
+        jamsEnabled, baseUrl, onJamChange: publishing?.onChange }, c.req.param("jamId")));
     } catch (error) {
       if (error instanceof JamActionError || error instanceof LinkActionError) {
         return c.json({ code: error.code, error: error.message }, error.status);
@@ -111,7 +115,7 @@ export function createApp({ resolver, store, jamStore, jamsEnabled = false, base
   });
 
   if (connections) app.route("/", connections);
-  if (threadStore) app.route("/", createThreadApp({ resolver, store: threadStore, baseUrl, publishing, history, contributor }));
+  if (threadStore) app.route("/", createThreadApp({ resolver, store: threadStore, baseUrl, publishing, history, contributor, collaboration }));
 
   app.get("/:slug", async (c) => {
     c.header("Vary", "Accept");

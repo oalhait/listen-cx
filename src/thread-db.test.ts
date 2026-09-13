@@ -1,9 +1,10 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 import { nanoid } from "nanoid";
+import { D1ThreadCollaborationStore } from "./thread-collaboration-db.js";
 import { D1ThreadStore } from "./thread-db.js";
 import { authorizeManagementCapability } from "./thread-security.js";
-import { mutationFingerprint } from "./thread.js";
+import { mutationFingerprint, sha256 } from "./thread.js";
 import type { Resolved } from "./resolve.js";
 
 const store = new D1ThreadStore(env.DB);
@@ -373,4 +374,66 @@ it('retains the original author through retries, reorders, profile edits, and re
   await expect(env.DB.prepare('UPDATE thread_contributions SET added_by_account_id = ? WHERE id = ?').bind(other.id, first.id).run()).rejects.toThrow();
   await store.manage(authorization, { kind: 'remove', id: first.id, expectedRevision: 3, requestKey: 'remove-author' });
   expect(await env.DB.prepare('SELECT added_by_account_id FROM thread_contributions WHERE id = ?').bind(first.id).first('added_by_account_id')).toBe(owner.id);
+});
+
+it("attributes songs to an opaque same-Thread participant and keeps that author immutable", async () => {
+  const collaboration = new D1ThreadCollaborationStore(env.DB);
+  const { view } = await setup();
+  const other = await setup();
+  const firstDigest = await sha256(`first-${crypto.randomUUID()}`);
+  const secondDigest = await sha256(`second-${crypto.randomUUID()}`);
+  const otherDigest = await sha256(`other-${crypto.randomUUID()}`);
+  const first = await collaboration.join(
+    view.publicCapability,
+    { kind: "anonymous", digest: firstDigest },
+    "First friend",
+  );
+  const second = await collaboration.join(
+    view.publicCapability,
+    { kind: "anonymous", digest: secondDigest },
+    "Second friend",
+  );
+  const outsider = await collaboration.join(
+    other.view.publicCapability,
+    { kind: "anonymous", digest: otherDigest },
+    "Other room",
+  );
+  const request = {
+    expectedRevision: 0,
+    requestKey: "participant-attributed",
+    source: spotify,
+    track,
+    addedByParticipantId: first.participant.id,
+  };
+
+  await store.add(view.publicCapability, request);
+  await expect(store.add(view.publicCapability, {
+    ...request,
+    addedByParticipantId: second.participant.id,
+  })).rejects.toMatchObject({ code: "request_conflict" });
+  await expect(store.add(view.publicCapability, {
+    expectedRevision: 1,
+    requestKey: "cross-thread-participant",
+    source: spotify,
+    track,
+    addedByParticipantId: outsider.participant.id,
+  })).rejects.toThrow();
+
+  const current = (await store.get(view.publicCapability))!;
+  expect(current.revision).toBe(1);
+  expect(current.contributions[0]!.addedBy).toEqual({
+    participantId: first.participant.id,
+    displayName: "First friend",
+    avatarUrl: null,
+  });
+  expect(JSON.stringify(current)).not.toContain(firstDigest);
+  expect(JSON.stringify(current)).not.toContain(secondDigest);
+  expect(JSON.stringify(current)).not.toContain("anonymous_digest");
+  await expect(env.DB.prepare(`UPDATE thread_contributions
+    SET added_by_participant_public_id = ? WHERE id = ?`)
+    .bind(second.participant.id, current.contributions[0]!.id).run()).rejects.toThrow();
+  expect(await env.DB.prepare(`SELECT added_by_participant_public_id
+    FROM thread_contributions WHERE id = ?`)
+    .bind(current.contributions[0]!.id).first<string>("added_by_participant_public_id"))
+    .toBe(first.participant.id);
 });

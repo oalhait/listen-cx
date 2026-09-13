@@ -4,12 +4,13 @@ import { Hono } from "hono";
 import { createAccountApp } from "./account-app.js";
 import { D1PublicationStore } from "./publication-db.js";
 import { D1ThreadStore } from "./thread-db.js";
+import { D1ThreadCollaborationStore } from "./thread-collaboration-db.js";
+import { ThreadCollaborationService } from "./thread-collaboration-service.js";
 import { D1LinkStore } from "./db.js";
 import { ItunesClient } from "./itunes.js";
 import { Resolver } from "./resolve.js";
 import { SpotifyClient } from "./spotify.js";
 import { createApp } from "./app.js";
-import { D1JamStore } from "./jam-db.js";
 import {
   appleMusicConfigFromEnv,
   createAppleMusicDeveloperToken,
@@ -65,6 +66,10 @@ export default {
     const baseUrl = getWorkerBaseUrl(env, request.url);
     const onChange = (capability: string) => { ctx.waitUntil(wakeDue(env, capability)); };
     const history = new ThreadHistoryService(env.DB);
+    const collaboration = new ThreadCollaborationService(
+      new D1ThreadCollaborationStore(env.DB),
+      c => currentAccount(c, env.DB),
+    );
     const connections = new Hono().route("/", createThreadHistoryApp(env.DB, baseUrl, history));
     if (env.ACCOUNT_SUBSCRIPTIONS_ENABLED === "true") {
       connections.route("/", createAccountApp(env, baseUrl, onChange));
@@ -73,9 +78,9 @@ export default {
     return createApp({
       resolver: new Resolver(new SpotifyClient(), new ItunesClient()),
       store: new D1LinkStore(env.DB),
-      jamStore: new D1JamStore(env.DB, { maxJams: 10_000 }),
       jamsEnabled: jamsAreEnabled(env.JAMS_ENABLED, request.url),
       threadStore: new D1ThreadStore(env.DB),
+      collaboration,
       appleMusic: createAppleMusicIssuer(env),
       baseUrl,
       connections,

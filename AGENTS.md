@@ -1,15 +1,20 @@
 # AGENTS.md
 
 This repository contains source-provider track resolution, short links, and a
-web-only Threads product. Threads own ordered collaborative songs; Apple Music
-and Spotify are downstream consumers, never authorities for website order.
+web-only Threads product, presented to invitees and MCP callers as shareable Jams.
+Threads own ordered collaborative songs; Apple Music and Spotify are downstream
+consumers, never authorities for website order. Chat and advisory votes are separate
+collaboration state and must never advance playlist revisions or reorder songs.
 
 ## Scope
 
 Keep source metadata, bounded provider retries, D1 storage, the Hono Worker API,
 and the current frontend. Public Thread capabilities can read/contribute; separate
 management capabilities remove/reorder/close. Preserve durable revisions and replay
-receipts. Keep unresolved cross-provider identities explicit, never guessed matches.
+receipts. Public Jam participants use a signed-in account identity or a digest-only
+browser/caller capability; never expose raw participant keys, account IDs, or digests.
+Keep chat plain text, vote/message retries idempotent, closed Jam history readable,
+and moderation soft. Keep unresolved cross-provider identities explicit, never guessed matches.
 
 Provider publishing remains blocked until a trusted adapter is authorized and
 verified by actual provider readback. No native companion requirement, notifications,

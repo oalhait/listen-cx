@@ -6,8 +6,8 @@ shareable URL with its real title, artist, and artwork. Albums and `spotify.link
 short URLs are not supported. Apple album URLs must include a track's `?i=` ID.
 
 The recipient page opens the original provider URL and offers a clearly labeled
-search on the other app. No app preference is saved. Threads collect ordered songs
-collaboratively. Connect Apple Music, Spotify, or both from **Account settings**, then
+search on the other app. No app preference is saved. Shareable Jams use the preserved
+Thread model to collect ordered songs, friend votes, and plain-text chat. Connect Apple Music, Spotify, or both from **Account settings**, then
 subscribe to Threads separately for each service. Provider credentials are
 encrypted once and shared across that account's subscriptions. Actual provider readback is
 required before a playlist is reported as synced; fixture tests alone do not
@@ -32,7 +32,8 @@ pnpm dev
   the recipient page instead. Ties select JSON; `*/*` alone stays JSON. Responses
   include `Vary: Accept`. Missing slugs use the same negotiation with status 404.
   Reading a link does not contact providers or redirect automatically.
-- `GET /api/jams/:jamId` returns a Jam's state and active ordered queue when the
+- `GET /api/jams/:jamId` returns a Jam's state, human sharing URL, active ordered
+  queue, participant count, and vote totals when the
   local-only Jam gate is enabled; otherwise the route stays dark with 404.
 - `GET /api/apple-music/developer-token` signs a short-lived MusicKit developer
   token when Apple credentials are configured and the request origin is allowed.
@@ -80,10 +81,17 @@ The server always exposes:
 When `JAMS_ENABLED=true` and the request host is loopback, it also exposes:
 
 - `create_jam`: creates a collaborative ordered queue and returns its public id
-  plus a secret management token.
-- `get_jam`: reads Jam state and active tracks.
-- `add_track_to_jam`: idempotently resolves and appends a track.
+  plus a friend-safe `/t/:capability` sharing URL and secret management token.
+- `get_jam`: reads Jam state, active tracks, participant count, contributor names,
+  and vote totals.
+- `add_track_to_jam`: idempotently resolves and appends a track; an optional joined
+  participant key attributes the addition.
+- `join_jam`: joins under a visible display name using a private local caller key.
+- `post_jam_message`: posts bounded plain text with an idempotency key.
+- `list_jam_messages`: reads stable, cursor-paginated chat history.
+- `set_jam_track_vote`: sets an upvote, downvote, or clears the caller's vote.
 - `remove_track_from_jam`: removes a contribution with the management token.
+- `remove_jam_message`: soft-removes chat with the management token.
 - `close_jam`: permanently closes a Jam to new tracks.
 
 Only direct Spotify track URLs and Apple Music track deep-links are supported by
@@ -97,10 +105,15 @@ Create and get results use an `ok` envelope. Failures include a stable error
 `code`, HTTP-style `status`, safe `message`, and `retryable` flag so agents can
 decide whether to correct a request or retry it without parsing prose.
 
-Jam additions require a caller-generated `requestKey`. Reuse the same key when
-retrying the same track operation; using it for another track is rejected. A Jam
+Jam additions, messages, and votes require a caller-generated `requestKey`. Reuse
+the same key only when retrying the same operation; using it for another action is
+rejected. MCP chat and voting also require a cryptographically random 43-character
+base64url `participantKey`. It is hashed before storage, never returned, and is only
+accepted while the loopback-only Jam gate is active. A Jam
 holds at most 50 active tracks and 500 lifetime contributions. Removal is soft,
-closure is permanent, and both management operations are idempotent.
+closure is permanent, and both management operations are idempotent. Vote-change
+receipts are capped at 1,000 per participant and 10,000 per Jam so retry keys cannot
+create unbounded storage growth.
 
 The checked-in production, staging, and dev Worker environments set
 `JAMS_ENABLED=false`; `.dev.vars` enables it for the local Worker. The Worker also
@@ -125,19 +138,31 @@ authorize their account.
 
 ## Threads
 
-Open `/threads/new` to create an ordered, collaborative collection. The website
-owns the songs and their order. Anyone with the public sharing link can read and
-add tracks; a separate private management link can reorder, remove, and close. Legacy per-Thread Apple connections permanently lock
+Open `/threads/new` to create an ordered, collaborative collection. Its public
+`/t/:capability` page is presented as a Jam. The website owns the songs and their
+order. Anyone with the public sharing link can read and add tracks; friends can
+join with a browser-scoped display name, chat, and cast one advisory up/down vote
+per song. Votes never silently reorder the canonical queue. A separate private
+management link can reorder, remove, close, and moderate chat. Legacy per-Thread Apple connections permanently lock
 removal and reordering; additions and closure remain available. New account
 subscriptions do not lock website edits and can be unsubscribed without deleting
 the provider playlist.
-Closing freezes edits while leaving the songs readable. Other browsers see changes
-on refresh; stale edits return 409 instead of overwriting newer state.
+Closing freezes songs, joins, votes, and chat while leaving the full history
+readable; managers can still remove abusive messages. Visible pages poll for queue
+and conversation updates without discarding focus or drafts. Stale edits return
+409 instead of overwriting newer state.
 
 Run `pnpm migrate:local` after pulling this change, then `pnpm dev`. Migration
 `0004` through `0006` add revisions, publication connections, and confirmed
 counterpart identities to the historical D1 schema. Migration `0007` adds accounts,
 sessions, OAuth state, and subscriber-owned publication rows.
+Migration `0014` adds digest-backed collaboration participants, idempotent messages,
+advisory votes, moderation tombstones, and a social revision that is independent
+from playlist publication revisions.
+Migration `0015` adds immutable participant attribution for songs and the profile/link
+triggers needed to refresh collaboration views without rewriting the already-applied
+`0014` migration.
+Migration `0016` adds race-safe per-participant and per-Jam vote-receipt limits.
 Existing rows, capability digests, removed contributions, and historical positions
 are preserved. Legacy Threads start at revision zero with unverified catalog
 identities. The old Thread Durable Object is not restored.
@@ -161,8 +186,13 @@ All Thread mutations require JSON, a matching `Origin`, and
 | `GET /api/threads/:capability` | Public snapshot: title, revision, ordered contributions, closed state, and publication statuses. No management secret or digest. |
 | `GET /t/:capability` | Thread page; management controls require its scoped HttpOnly cookie. |
 | `POST /api/threads/:capability/contributions` | `{url, requestKey, expectedRevision}`; resolves source metadata before committing. |
+| `GET /api/threads/:capability/collaboration` | Public participant count, vote aggregates, bounded chat history, and viewer-specific joined/vote state. Returns an ETag and never exposes account IDs or participant digests. |
+| `POST /api/threads/:capability/collaboration/join` | `{displayName}`; binds a 1–40 character name to an HttpOnly, SameSite=Strict browser capability. |
+| `POST /api/threads/:capability/messages` | `{text, requestKey}`; joined participants post 1–500 plain-text characters idempotently. |
+| `POST /api/threads/:capability/votes` | `{contributionId, vote, requestKey}` where `vote` is `up`, `down`, or `clear`; joined participants have one current vote per active song. |
 | `POST /t/:capability/manage/activate` | Exchanges `{managementCapability}` for a Thread-scoped HttpOnly, SameSite=Strict cookie. HTTPS cookies are Secure. The browser removes the fragment before exchange. |
 | `POST /t/:capability/manage/mutate` | Manager only: `{kind, requestKey, expectedRevision}`, with `id` for `remove`, all active `ids` for `reorder`, or `kind: "close"`. In account mode, legacy `connect` actions return 410. |
+| `POST /t/:capability/manage/messages` | Manager only: `{messageId, requestKey}` soft-removes one message, including after the Jam is closed. |
 | `GET /settings` | Account onboarding/settings with independent Apple Music and Spotify connections. The former per-Thread connection page redirects here. |
 | `GET /api/account` | Private connected providers and their subscriptions. Never returns credentials, provider subject, account group IDs, or publisher keys. |
 | `POST /account/:provider/start` | Starts browser-bound sign-in for Spotify or Apple; accepts an optional Thread capability as `returnTo`. |
@@ -323,7 +353,7 @@ identity cannot be replaced by reconnecting with a different provider account.
 Enabling publishing in production requires the Spotify redirect URI
 `https://listen.cx/account/spotify/callback` to be registered for the configured Spotify
 app and the provider secrets above. Deploying the current Worker requires all D1
-migrations through `0013_publication_rate_limits.sql` first.
+migrations through `0016_thread_collaboration_vote_limits.sql` first.
 Migration `0013` preserves catalog rate-limit deadlines across Thread edits and retries.
 The account routes, including `/settings`, require `ACCOUNT_SUBSCRIPTIONS_ENABLED`.
 Run the fail-fast rollout manually with `pnpm migrate:production && pnpm deploy:production`;
@@ -367,8 +397,11 @@ existing destination rather than making a new playlist.
 - `src/resolve.ts`: source-provider metadata for short links.
 - `src/music-catalog.ts`, `src/track-matching.ts`: bounded catalog reads and deterministic matching.
 - `src/automatic-matching.ts`: durable per-destination matches before publication.
-- `src/jam.ts`, `src/jam-db.ts`, `src/jams.ts`: capability-secured Jam domain,
-  preserved D1 storage, and actions.
+- `src/jams.ts`, `src/mcp.ts`: the agent-facing Jam adapter over the canonical
+  Thread mutation engine. `src/jam.ts` and `src/jam-db.ts` retain legacy compatibility
+  tests but are not the public write authority.
+- `src/thread-collaboration.ts`, `src/thread-collaboration-db.ts`: private participant
+  identities, chat, votes, pagination, and moderation.
 - `src/apple-music-auth.ts`: origin-bound MusicKit developer-token signing.
 - `src/db.ts`, `src/app.ts`, `src/worker.ts`: D1 storage and API.
 - `src/recipient.ts`: negotiated recipient HTML with escaped metadata.
@@ -388,8 +421,8 @@ pnpm test:live      # read-only network checks; no credentials required
 ```
 
 `pnpm test` also connects a real MCP SDK client over the Worker's Streamable HTTP
-transport, creates and reads a link, and exercises a complete Jam lifecycle
-against test D1.
+transport, creates and reads a link, and exercises a complete Jam lifecycle—including
+the friend-safe URL, participant join, chat, voting, moderation, and closure—against test D1.
 
 The live checks assert known Spotify titles and artists, Apple lookup and search
 in US/GB storefronts, and the Apple page fallback. They are separate from offline

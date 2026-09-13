@@ -13,14 +13,14 @@ it("escapes Thread metadata and keeps scripts external", () => {
   expect(page).toContain('src="/thread-page.js"');
   expect(page).toContain('href="/2345678"');
 });
-it("publishes a Thread preview using its first safe artwork and song count", () => {
+it("publishes a Jam preview using its first safe artwork and song count", () => {
   const page = threadPage({ ...view, title: "Late night drives", contributions: [
     { ...view.contributions[0]!, artworkUrl: "https://images.example/cover.jpg?a=1&b=2" },
     { ...view.contributions[0]!, id: 2, title: "Second song" },
   ] }, false, [], false, "https://listen.test");
   expect(page).toContain('<meta property="og:type" content="website">');
-  expect(page).toContain('<meta property="og:title" content="Late night drives — a music Thread">');
-  expect(page).toContain('<meta property="og:description" content="2 songs, collected together. Listen or add yours on listen.cx.">');
+  expect(page).toContain('<meta property="og:title" content="Late night drives — a music Jam">');
+  expect(page).toContain('<meta property="og:description" content="2 songs, collected together. Listen, vote, or add yours on listen.cx.">');
   expect(page).toContain(`<meta property="og:url" content="https://listen.test/t/${view.publicCapability}">`);
   expect(page).toContain('<meta property="og:image" content="https://images.example/cover.jpg?a=1&amp;b=2">');
   expect(page).toContain('<meta property="og:image:alt" content="Artwork for Song &lt;one&gt; by Artist">');
@@ -169,4 +169,44 @@ it('keeps unsafe contributor photos out of the markup and supports older songs',
     expect(page).toContain('Added by Omar');
     expect(page).not.toContain('class="contributor-avatar"');
   }
+});
+
+it('renders an accessible collaborative Jam with a fragment-free sharing target', () => {
+  const page = threadPage(view, true);
+  expect(page).toContain('id="invite-friends"');
+  expect(page).toContain(`id="public-link" href="/t/${view.publicCapability}"`);
+  expect(page).toContain('id="jam-join-form"');
+  expect(page).toContain('maxlength="40"');
+  expect(page).toContain('id="chat-log"');
+  expect(page).toContain('role="log"');
+  expect(page).toContain('aria-live="off"');
+  expect(page).toContain('id="chat-message"');
+  expect(page).toContain('maxlength="500"');
+  expect(page).toContain('data-vote="up"');
+  expect(page).toContain('data-vote="down"');
+  expect(page).toContain('aria-pressed="false"');
+  expect(page).not.toContain('#manage=');
+});
+
+it('keeps closed Jams readable while removing join, compose, and active queue controls', () => {
+  const closed = threadPage({ ...view, closedAt: 'now' }, true);
+  expect(closed).toContain('This Thread is closed');
+  expect(closed).toContain('Jam is read-only');
+  expect(closed).toContain('id="chat-log"');
+  expect(closed).toContain('Voting and chat are closed');
+  expect(closed).not.toContain('id="jam-join-form"');
+  expect(closed).not.toContain('id="chat-form"');
+  expect(closed).not.toContain('id="add-song-form"');
+  expect(closed).not.toContain('data-remove="1"');
+  expect(closed).toContain('data-vote="up"');
+  expect(closed).toMatch(/data-vote="up"[^>]*disabled/);
+});
+
+it('escapes song titles in vote labels and exposes manager-only chat moderation state', () => {
+  const publicPage = threadPage(view, false);
+  const managerPage = threadPage(view, true);
+  expect(publicPage).toContain('aria-label="Vote on Song &lt;one&gt;"');
+  expect(publicPage).not.toContain('data-managed="true"');
+  expect(managerPage).toContain('data-managed="true"');
+  expect(managerPage).toContain('id="thread-management"');
 });

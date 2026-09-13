@@ -76,7 +76,7 @@ describe("Thread HTTP contract", () => {
     expect(page.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
     const html = await page.text();
     expect(html).not.toContain(creationKey);
-    expect(html).toContain('<meta property="og:title" content="Road trip — a music Thread">');
+    expect(html).toContain('<meta property="og:title" content="Road trip — a music Jam">');
     expect(html).toContain(`<meta property="og:url" content="${baseUrl}/t/${cap}">`);
     expect((await post(`/t/${cap}/manage/activate`, { managementCapability: cap })).status).toBe(403);
     const response = await post(`/t/${cap}/manage/activate`, { managementCapability: creationKey });
