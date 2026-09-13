@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "listen-cx",
-  "main": "src/worker.ts",
+  "main": "src/worker-production.ts",
   "assets": {
     "directory": "./public"
   },
@@ -21,10 +21,10 @@
   "vars": {
     "BASE_URL": "https://listen.cx",
     "JAMS_ENABLED": false,
-    "MUSIC_ACCOUNT_CONNECTIONS_ENABLED": "true",
-    "ACCOUNT_SUBSCRIPTIONS_ENABLED": "true",
-    "SPOTIFY_PUBLISHING_ENABLED": "true",
-    "APPLE_PUBLISHING_ENABLED": "true",
+    "MUSIC_ACCOUNT_CONNECTIONS_ENABLED": "false",
+    "ACCOUNT_SUBSCRIPTIONS_ENABLED": "false",
+    "SPOTIFY_PUBLISHING_ENABLED": "false",
+    "APPLE_PUBLISHING_ENABLED": "false",
     "SPOTIFY_REDIRECT_URI": "https://listen.cx/account/spotify/callback"
   },
   "d1_databases": [
@@ -50,12 +50,19 @@
   "env": {
     "dev": {
       "name": "listen-cx-dev",
+      "main": "src/worker.ts",
+      "migrations": [
+        { "tag": "thread-publisher-v1", "new_sqlite_classes": ["ThreadPublisher"] }
+      ],
       "routes": [],
       "vars": {
         "BASE_URL": "",
         "JAMS_ENABLED": false,
+        "MUSIC_ACCOUNT_CONNECTIONS_ENABLED": "false",
+        "ACCOUNT_SUBSCRIPTIONS_ENABLED": "false",
         "SPOTIFY_PUBLISHING_ENABLED": "false",
-        "APPLE_PUBLISHING_ENABLED": "false"
+        "APPLE_PUBLISHING_ENABLED": "false",
+        "SPOTIFY_REDIRECT_URI": ""
       },
       "d1_databases": [
         {
@@ -138,6 +145,12 @@
     ]
   },
   "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ThreadLive"
+      ]
+    },
     {
       "tag": "thread-publisher-v1",
       "new_sqlite_classes": [

@@ -1,6 +1,15 @@
 import { env } from "cloudflare:workers";
 import { runInDurableObject, runDurableObjectAlarm } from "cloudflare:test";
 import { expect, it, vi } from "vitest";
+import production, { ThreadLive as ProductionThreadLive, ThreadPublisher as ProductionThreadPublisher } from "./worker-production.js";
+import worker, { ThreadPublisher } from "./worker.js";
+import { ThreadLive } from "./legacy-thread.js";
+
+it("uses the current Worker while retaining the legacy class in the production entrypoint", () => {
+  expect(production).toBe(worker);
+  expect(ProductionThreadLive).toBe(ThreadLive);
+  expect(ProductionThreadPublisher).toBe(ThreadPublisher);
+});
 
 it("retires legacy requests and alarms without deleting stored Thread data or sending notifications", async () => {
   const namespace = (env as unknown as { LEGACY_THREAD: DurableObjectNamespace }).LEGACY_THREAD;
