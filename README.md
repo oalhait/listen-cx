@@ -289,8 +289,9 @@ One initial Spotify request timed out; the next live run passed.
 ## Existing deployments and data
 
 The restart and Threads integration were deployed to `staging.listen.cx` on
-September 12, 2026, with both provider publishing flags disabled. Migrations
-`0004`–`0006` were applied after exporting the staging database. Production has
+September 12, 2026. A subsequent deployment enabled personal account connections
+and both provider publishing flags; no personal account is connected by default.
+Migrations `0004`–`0006` were applied after exporting the staging database. Production has
 not been redeployed. Historical D1 migration files remain unchanged; no remote
 rows have been deleted. Existing source metadata retains its original values,
 including any old inferred cross-provider URLs. Those values have not been
