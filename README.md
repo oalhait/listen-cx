@@ -127,8 +127,8 @@ authorize their account.
 
 Open `/threads/new` to create an ordered, collaborative collection. The website
 owns the songs and their order. Anyone with the public sharing link can read and
-add tracks; a separate private management link can connect music apps, confirm
-recording matches, reorder, remove, and close. Legacy per-Thread Apple connections permanently lock
+add tracks; a separate private management link can confirm recording matches,
+reorder, remove, and close. Legacy per-Thread Apple connections permanently lock
 removal and reordering; additions and closure remain available. New account
 subscriptions do not lock website edits and can be unsubscribed without deleting
 the provider playlist.
@@ -250,7 +250,8 @@ and editable destinations, including unsubscribed copies.
 Staging reuses the registered `https://staging.listen.cx/auth/callback` Spotify URI.
 The separate staging authorization Worker forwards `account.` states to
 `/account/spotify/callback` and legacy `threads.` states to
-`/connections/spotify/callback`. Deploy that routing update before enabling account
+`/connections/spotify/callback`. Account mode replaces the old connection flow;
+old authorization attempts must restart from settings. Deploy the routing update before enabling account
 mode. The product validates encrypted state, expiry, a browser-bound cookie, and
 single-use consumption before exchanging a code. Account sessions use Secure,
 HttpOnly, SameSite=Lax cookies on HTTPS; all mutations require same-origin JSON actions.
@@ -310,7 +311,14 @@ One initial Spotify request timed out; the next live run passed.
 The restart and Threads integration were deployed to `staging.listen.cx` on
 September 12, 2026. A subsequent deployment enabled personal account connections
 and both provider publishing flags; no personal account is connected by default.
-Migrations `0004`–`0006` were applied after exporting the staging database. Production has
+Account settings and subscriber-owned playlists were deployed to staging on
+September 12, 2026 (version `574e154c-9bd0-4080-b30a-023456e082ab`), after a fresh
+database export and migration `0007`. The UI and Spotify sign-in redirect were
+checked in the live browser; the account/subscription change passed 435 offline tests.
+Personal subscription readback still needs a real signed-in user. Apple sign-in
+remains unavailable: the checked Doppler `listen-cx` configs (`dev_personal`, `stg`)
+contain MusicKit credentials, but not the separate Sign in with Apple credentials.
+Migrations `0004`–`0006` were also applied after exporting staging. Production has
 not been redeployed. Historical D1 migration files remain unchanged; no remote
 rows have been deleted. Existing source metadata retains its original values,
 including any old inferred cross-provider URLs. Those values have not been
