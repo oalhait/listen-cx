@@ -118,7 +118,7 @@ uses `APPLE_MUSIC_TEAM_ID`, `APPLE_MUSIC_KEY_ID`,
 is returned. Each MusicKit listener still has to authorize their Apple Music
 account and subscription interactively.
 
-`SPOTIFY_CLIENT_ID` is available for a future browser Authorization Code + PKCE
+`SPOTIFY_CLIENT_ID` identifies the app in the browser Authorization Code + PKCE
 flow. A client ID alone does not authorize server-side Spotify writes or playback;
 the Spotify dashboard must also allow the exact callback and each listener must
 authorize their account.
