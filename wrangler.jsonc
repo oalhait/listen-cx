@@ -21,10 +21,10 @@
   "vars": {
     "BASE_URL": "https://listen.cx",
     "JAMS_ENABLED": false,
-    "MUSIC_ACCOUNT_CONNECTIONS_ENABLED": "false",
-    "ACCOUNT_SUBSCRIPTIONS_ENABLED": "false",
-    "SPOTIFY_PUBLISHING_ENABLED": "false",
-    "APPLE_PUBLISHING_ENABLED": "false",
+    "MUSIC_ACCOUNT_CONNECTIONS_ENABLED": "true",
+    "ACCOUNT_SUBSCRIPTIONS_ENABLED": "true",
+    "SPOTIFY_PUBLISHING_ENABLED": "true",
+    "APPLE_PUBLISHING_ENABLED": "true",
     "SPOTIFY_REDIRECT_URI": "https://listen.cx/account/spotify/callback"
   },
   "d1_databases": [

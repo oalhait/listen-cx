@@ -284,9 +284,8 @@ photo storage; provider-seeded HTTPS photos remain supported. Migration
 
 ### Publisher configuration
 
-Staging enables `ACCOUNT_SUBSCRIPTIONS_ENABLED`, `MUSIC_ACCOUNT_CONNECTIONS_ENABLED`,
-and both publishing flags. Production keeps those features disabled until its provider
-secrets and redirect configuration are verified; dev keeps all four disabled. App
+Production and staging enable `ACCOUNT_SUBSCRIPTIONS_ENABLED`, `MUSIC_ACCOUNT_CONNECTIONS_ENABLED`,
+and both publishing flags; dev keeps all four disabled. App
 configuration does not preauthorize any person.
 Existing research sessions and per-Thread credentials are not imported into accounts.
 
@@ -326,8 +325,8 @@ Enabling publishing in production requires the Spotify redirect URI
 app and the provider secrets above. Deploying the current Worker requires all D1
 migrations through `0013_publication_rate_limits.sql` first.
 Migration `0013` preserves catalog rate-limit deadlines across Thread edits and retries.
-The initial production rollout leaves account and publishing flags disabled. Run the
-fail-fast rollout manually with `pnpm migrate:production && pnpm deploy:production`;
+The account routes, including `/settings`, require `ACCOUNT_SUBSCRIPTIONS_ENABLED`.
+Run the fail-fast rollout manually with `pnpm migrate:production && pnpm deploy:production`;
 this repository forbids agent-executed production deployments.
 
 The encryption key is base64 encoding of 32 random bytes; preserve it across

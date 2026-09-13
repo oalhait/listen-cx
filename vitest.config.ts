@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
 import { defineConfig } from "vitest/config";
 
@@ -13,6 +14,7 @@ export default defineConfig({
           ACCOUNT_SUBSCRIPTIONS_ENABLED: "false",
           SPOTIFY_PUBLISHING_ENABLED: "false",
           APPLE_PUBLISHING_ENABLED: "false",
+          TEST_PRODUCTION_VARS: JSON.parse(await readFile(new URL("./wrangler.jsonc", import.meta.url), "utf8")).vars,
           TEST_MIGRATIONS: await readD1Migrations(path.join(import.meta.dirname, "migrations")),
         },
       },
