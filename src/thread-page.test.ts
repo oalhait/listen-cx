@@ -136,3 +136,23 @@ it('renders unified song entries without provider match links or controls', () =
   expect(uncertain).not.toContain('Matched on Apple Music');
   expect(uncertain).not.toContain('https://music.apple.com/us/song/456');
 });
+
+
+it('shows the contributor name with escaped markup and a safe round photo', () => {
+  const page = threadPage({ ...view, contributions: [{ ...view.contributions[0]!, addedBy: {
+    displayName: '<Omar> & friends', avatarUrl: 'https://example.com/photo.jpg?a=1&b=2',
+  } }] }, false);
+  expect(page).toContain('Added by &lt;Omar&gt; &amp; friends');
+  expect(page).toContain('class="contributor-avatar"');
+  expect(page).toContain('src="https://example.com/photo.jpg?a=1&amp;b=2"');
+  expect(page).toContain('referrerpolicy="no-referrer"');
+});
+
+it('keeps unsafe contributor photos out of the markup and supports older songs', () => {
+  expect(threadPage(view, false)).toContain('Added by Guest');
+  for (const avatarUrl of ['javascript:alert(1)', 'http://example.com/a', 'https://user:secret@example.com/a', 'https://example.com/' + 'a'.repeat(2048)]) {
+    const page = threadPage({ ...view, contributions: [{ ...view.contributions[0]!, addedBy: { displayName: 'Omar', avatarUrl } }] }, false);
+    expect(page).toContain('Added by Omar');
+    expect(page).not.toContain('class="contributor-avatar"');
+  }
+});

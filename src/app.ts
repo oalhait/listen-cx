@@ -11,7 +11,7 @@ import { handleMcpRequest } from "./mcp.js";
 import type { AppleMusicDeveloperToken } from "./apple-music-auth.js";
 import { getJam, JamActionError } from "./jams.js";
 
-export function createApp({ resolver, store, jamStore, jamsEnabled = false, baseUrl, appleMusic, threadStore, publishing, connections, history }: {
+export function createApp({ resolver, store, jamStore, jamsEnabled = false, baseUrl, appleMusic, threadStore, publishing, connections, history, contributor }: {
   resolver: Pick<Resolver, "resolve">;
   store: LinkStore;
   jamStore?: JamStore;
@@ -22,6 +22,7 @@ export function createApp({ resolver, store, jamStore, jamsEnabled = false, base
     issueDeveloperToken(): Promise<AppleMusicDeveloperToken>;
   };
   threadStore?: D1ThreadStore;
+  contributor?: (c: Context) => Promise<{ id: string } | null>;
   publishing?: ThreadPublishing;
   connections?: Hono;
   history?: { remember(c: Context, capability: string): Promise<void>; prepare?(c: Context): Promise<void> };
@@ -110,7 +111,7 @@ export function createApp({ resolver, store, jamStore, jamsEnabled = false, base
   });
 
   if (connections) app.route("/", connections);
-  if (threadStore) app.route("/", createThreadApp({ resolver, store: threadStore, baseUrl, publishing, history }));
+  if (threadStore) app.route("/", createThreadApp({ resolver, store: threadStore, baseUrl, publishing, history, contributor }));
 
   app.get("/:slug", async (c) => {
     c.header("Vary", "Accept");

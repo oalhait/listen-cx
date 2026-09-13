@@ -1,3 +1,4 @@
+import { providerProfile, type PublicProfile } from "./profile.js";
 export type Sealed = { iv: string; ciphertext: string };
 export type SpotifyTokens = { accessToken: string; refreshToken: string; expiresAt: number };
 
@@ -162,7 +163,7 @@ export async function refreshSpotifyTokens(
   }, credentials.refreshToken, fetcher);
 }
 
-export async function getSpotifyAccount(accessToken: string, fetcher: typeof fetch = fetch): Promise<{ id: string; label: string; accountId: string }> {
+export async function getSpotifyAccount(accessToken: string, fetcher: typeof fetch = fetch): Promise<{ id: string; label: string; accountId: string; profile: PublicProfile }> {
   if (!validToken(accessToken)) throw new MusicAuthError("authorization_required", 401);
   const body = await requestJson("https://api.spotify.com/v1/me", { headers: { Authorization: `Bearer ${accessToken}` } }, 65536, "invalid_provider_response", fetcher);
   if (!validToken(body.id) || body.id.length > 256) throw new MusicAuthError("invalid_provider_response", 502);
@@ -170,7 +171,7 @@ export async function getSpotifyAccount(accessToken: string, fetcher: typeof fet
   if (!validToken(accountId) || accountId.length > 256) throw new MusicAuthError("invalid_provider_response", 502);
   const label = typeof body.display_name === "string" && body.display_name.trim() && body.display_name.length <= 256
     && !/[\x00-\x1f\x7f]/.test(body.display_name) ? body.display_name : body.id;
-  return { id: body.id, label, accountId };
+  return { id: body.id, label, accountId, profile: providerProfile(body) };
 }
 
 export async function signAppleDeveloperToken(

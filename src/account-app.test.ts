@@ -210,3 +210,58 @@ it("does not link a second provider after the initiating session signs out durin
   expect(callback.headers.get("set-cookie")).toBeNull();
   expect(await accounts.connections(owner.account.id)).toHaveLength(1);
 });
+
+it('edits only the signed-in public profile and rejects unsafe or forged fields', async () => {
+  const owner = await login('apple');
+  const other = await login('spotify');
+  const { profileBinding } = await (await get('/api/account', owner.cookie)).json() as { profileBinding: string };
+  expect((await post('/api/account/profile', { displayName: 'Name', avatarUrl: null })).status).toBe(401);
+  expect((await app.request(origin + '/api/account/profile', { method: 'POST', headers: { Cookie: owner.cookie, Origin: 'https://evil.test', 'Content-Type': 'application/json' }, body: '{"displayName":"Forged","avatarUrl":null}' })).status).toBe(403);
+  for (const body of [{ displayName: '', avatarUrl: null }, { displayName: 'Name', avatarUrl: 'javascript:bad' }, { displayName: 'Name', avatarUrl: null, accountId: other.account.id }]) {
+    expect((await post('/api/account/profile', { ...body, profileBinding }, owner.cookie)).status).toBe(400);
+  }
+  expect(await (await post('/api/account/profile', { displayName: '  Omar  ', avatarUrl: 'https://example.com/omar.jpg', profileBinding }, owner.cookie)).json()).toEqual({ profile: { displayName: 'Omar', avatarUrl: 'https://example.com/omar.jpg' } });
+  expect(await (await get('/api/account', owner.cookie)).json()).toMatchObject({ profile: { displayName: 'Omar', avatarUrl: 'https://example.com/omar.jpg' } });
+  expect(await (await get('/api/account', other.cookie)).json()).toMatchObject({ profile: { displayName: 'Listener', avatarUrl: null } });
+  expect(await (await get('/api/account')).json()).toMatchObject({ profile: null });
+});
+
+it('imports an existing connected Spotify profile once using only its own verified account', async () => {
+  const owner = await login('spotify', 'existing-profile-owner', 'encrypted');
+  const token = vi.fn().mockResolvedValue('access');
+  const localApp = createAccountApp({ ...runtime, THREAD_PUBLISHER: { getByName: (name: string) => {
+    expect(name).toBe(`account_${owner.account.id}`);
+    return { getAccountSpotifyToken: token };
+  } } } as unknown as RuntimeEnv, origin, changed);
+  const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ id: 'playlist-owner', account_id: 'existing-profile-owner', display_name: 'Imported name', images: [{ url: 'https://i.scdn.co/image/photo' }] }));
+  const read = () => localApp.request(origin + '/api/account', { headers: { Cookie: owner.cookie } });
+  expect(await (await read()).json()).toMatchObject({ profile: { displayName: 'Imported name', avatarUrl: 'https://i.scdn.co/image/photo' } });
+  await read();
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(token).toHaveBeenCalledWith(owner.account.id);
+});
+
+it('does not import a mismatched Spotify identity and keeps settings available after provider failure', async () => {
+  const owner = await login('spotify', 'expected-profile-owner', 'encrypted');
+  const token = vi.fn().mockResolvedValue('access');
+  const localApp = createAccountApp({ ...runtime, THREAD_PUBLISHER: { getByName: () => ({ getAccountSpotifyToken: token }) } } as unknown as RuntimeEnv, origin, changed);
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ id: 'other-user', display_name: 'Wrong person' }));
+  const read = () => localApp.request(origin + '/api/account', { headers: { Cookie: owner.cookie } });
+  expect(await (await read()).json()).toMatchObject({ profile: { displayName: 'Listener', avatarUrl: null } });
+  await read();
+  expect(token).toHaveBeenCalledTimes(1);
+});
+
+it('rejects profile edits from a stale, different, or missing session binding', async () => {
+  const owner = await login('apple');
+  const other = await login('spotify');
+  const { profileBinding, authorizationBinding } = await (await get('/api/account', owner.cookie)).json() as { profileBinding: string; authorizationBinding: string };
+  const body = { displayName: 'Stale name', avatarUrl: null, profileBinding };
+  expect((await post('/api/account/profile', body, other.cookie)).status).toBe(403);
+  expect((await post('/api/account/profile', { ...body, profileBinding: undefined }, owner.cookie)).status).toBe(403);
+  expect((await post('/api/account/profile', { ...body, profileBinding: authorizationBinding }, owner.cookie)).status).toBe(403);
+  const { seal } = await import('./music-auth.js');
+  const expired = JSON.stringify(await seal(runtime.PUBLISHER_ENCRYPTION_KEY!, 'profile-edit-grant', { accountId: owner.account.id, sessionHash: await sha256(owner.cookie.split('=')[1]!), expiresAt: Date.now() - 1 }));
+  expect((await post('/api/account/profile', { ...body, profileBinding: expired }, owner.cookie)).status).toBe(403);
+  expect((await post('/api/account/profile', body, owner.cookie)).status).toBe(200);
+});

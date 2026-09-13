@@ -31,7 +31,7 @@ export interface ThreadPublishing {
   requireConnection?: (authorization: ManagementAuthorization, provider: Provider) => Promise<void>;
 }
 
-export function createThreadApp({ resolver, store, baseUrl, publishing, history }: { resolver: Pick<Resolver, "resolve">; store: D1ThreadStore; baseUrl: string; publishing?: ThreadPublishing; history?: { remember(c: Context, capability: string): Promise<void>; prepare?(c: Context): Promise<void> } }) {
+export function createThreadApp({ resolver, store, baseUrl, publishing, history, contributor }: { contributor?: (c: Context) => Promise<{ id: string } | null>; resolver: Pick<Resolver, "resolve">; store: D1ThreadStore; baseUrl: string; publishing?: ThreadPublishing; history?: { remember(c: Context, capability: string): Promise<void>; prepare?(c: Context): Promise<void> } }) {
   const app = new Hono();
   for (const path of ["/threads/new", "/t/*", "/api/threads", "/api/threads/*"]) {
     app.use(path, async (c, next) => {
@@ -84,7 +84,8 @@ export function createThreadApp({ resolver, store, baseUrl, publishing, history 
     const request = requestFields(body);
     const parsed = typeof body.url === "string" ? parseTrackUrl(body.url) : null;
     if (!parsed || typeof body.url !== "string") throw new ThreadError(400, "invalid_track", "Send a direct Spotify or Apple Music track link.");
-    const fingerprint = await mutationFingerprint({ kind: "add", source: parsed });
+    const addedByAccountId = (await contributor?.(c))?.id ?? null;
+    const fingerprint = await mutationFingerprint({ kind: "add", source: parsed, addedByAccountId });
     const replay = await store.preflight(capability, request.requestKey, fingerprint, request.expectedRevision);
     if (replay) {
       publishing?.onChange(capability);
@@ -95,7 +96,7 @@ export function createThreadApp({ resolver, store, baseUrl, publishing, history 
     catch { throw new ThreadError(502, "provider_unavailable", "The music app is unavailable. Try again."); }
     if (!track) throw new ThreadError(404, "track_not_found", "Track not found. Try another track link.");
     const source = verifiedSource(body.url, track);
-    const receipt = await store.add(capability, { ...request, source, track });
+    const receipt = await store.add(capability, { ...request, source, track, addedByAccountId });
     publishing?.onChange(capability);
     return c.json({ receipt, thread: await view(capability) });
   });

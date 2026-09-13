@@ -1,3 +1,4 @@
+import type { PublicProfile } from "./profile.js";
 import type { Resolved } from "./resolve.js";
 import { parseTrackUrl, type ParsedTrack, type Provider } from "./urls.js";
 
@@ -29,6 +30,7 @@ export interface ThreadContribution {
   linkSlug: string;
   source: ParsedTrack & { verified: boolean };
   matches?: AutomaticMatchSummary[];
+  addedBy?: PublicProfile | null;
   counterpart?: ParsedTrack & { confirmed: true };
 }
 
@@ -75,7 +77,7 @@ export interface MutationRequest {
 }
 
 export type ManagementIntent = { kind: "remove"; id: number } | { kind: "reorder"; ids: number[] } | { kind: "close" } | { kind: "connect"; provider: Provider } | { kind: "identify"; id: number; identity: ParsedTrack };
-export type MutationIntent = ManagementIntent | { kind: "add"; source: ParsedTrack };
+export type MutationIntent = ManagementIntent | { kind: "add"; source: ParsedTrack; addedByAccountId?: string | null };
 export interface MutationReceipt { revision: number; replayed: boolean }
 
 export function isThreadCapability(value: string): boolean {
@@ -108,7 +110,8 @@ export async function sha256(value: string): Promise<string> {
 }
 
 export function mutationFingerprint(intent: MutationIntent): Promise<string> {
-  if (intent.kind === "add") return sha256(JSON.stringify(["add", intent.source.provider, intent.source.id, intent.source.storefront]));
+  if (intent.kind === "add") return sha256(JSON.stringify(["add", intent.source.provider, intent.source.id, intent.source.storefront,
+    ...(intent.addedByAccountId ? [intent.addedByAccountId] : [])]));
   if (intent.kind === "identify") return sha256(JSON.stringify(["identify", intent.id, intent.identity.provider, intent.identity.id, intent.identity.storefront]));
   if (intent.kind === "remove") return sha256(JSON.stringify(["remove", intent.id]));
   if (intent.kind === "reorder") return sha256(JSON.stringify(["reorder", intent.ids]));

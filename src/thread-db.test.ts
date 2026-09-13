@@ -345,3 +345,32 @@ describe("Thread provider connections", () => {
     expect(JSON.stringify(current)).not.toContain("publisher_key");
   });
 });
+
+it('retains the original author through retries, reorders, profile edits, and removal', async () => {
+  const { D1AccountStore } = await import('./account-db.js');
+  const { D1ProfileStore } = await import('./profile-db.js');
+  const accounts = new D1AccountStore(env.DB);
+  const profiles = new D1ProfileStore(env.DB);
+  const owner = await accounts.upsert('spotify', crypto.randomUUID(), 'private-label');
+  const other = await accounts.upsert('apple', crypto.randomUUID(), 'Apple Music');
+  await profiles.update(owner.id, { displayName: 'First name', avatarUrl: null });
+  const { view, authorization } = await setup();
+  const request = { expectedRevision: 0, requestKey: 'attributed', source: spotify, track, addedByAccountId: owner.id };
+  await store.add(view.publicCapability, request);
+  await expect(store.add(view.publicCapability, { ...request, addedByAccountId: other.id })).rejects.toMatchObject({ code: 'request_conflict' });
+  await store.add(view.publicCapability, request);
+  const first = (await store.get(view.publicCapability))!.contributions[0]!;
+  expect(first.addedBy).toEqual({ displayName: 'First name', avatarUrl: null });
+  await add(view.publicCapability, 1);
+  const second = (await store.get(view.publicCapability))!.contributions[1]!;
+  await store.manage(authorization, { kind: 'reorder', ids: [second.id, first.id], expectedRevision: 2, requestKey: 'order-authors' });
+  await profiles.update(owner.id, { displayName: 'New name', avatarUrl: null });
+  const reordered = (await store.get(view.publicCapability))!;
+  expect(reordered.contributions.map(song => song.addedBy)).toEqual([null, { displayName: 'New name', avatarUrl: null }]);
+  expect(reordered.revision).toBe(3);
+  expect(JSON.stringify(reordered)).not.toContain(owner.id);
+  expect(JSON.stringify(reordered)).not.toContain('private-label');
+  await expect(env.DB.prepare('UPDATE thread_contributions SET added_by_account_id = ? WHERE id = ?').bind(other.id, first.id).run()).rejects.toThrow();
+  await store.manage(authorization, { kind: 'remove', id: first.id, expectedRevision: 3, requestKey: 'remove-author' });
+  expect(await env.DB.prepare('SELECT added_by_account_id FROM thread_contributions WHERE id = ?').bind(first.id).first('added_by_account_id')).toBe(owner.id);
+});

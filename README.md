@@ -235,6 +235,8 @@ does not change the Thread revision or grant management rights. Legacy per-Threa
 Apple connections retain their existing edit restriction; new personal subscriptions
 do not lock website edits. A removal or reorder can therefore block an Apple copy,
 whose provider adapter only supports exact suffix additions.
+- [ ] Investigate Apple Music playlist updates after song reordering or deletion. Spotify already applies the full ordered snapshot; Apple currently supports exact suffix additions only. Prove a safe update path with actual provider readback, including retries and duplicate songs, before changing the adapter.
+
 An old successful readback cannot mark a newer Thread revision synced.
 
 A private `ThreadPublisher` Durable Object serializes each destination through its
@@ -251,6 +253,29 @@ suffix. Both require provider readback before reporting success. An ambiguous
 creation is fenced to avoid duplicate playlists. Apple recovers an uncertain append
 only when readback establishes the exact intended list; it never blindly re-appends.
 Unexpected Apple playlist edits require attention rather than replacement or removal.
+
+### Song attribution and profiles
+
+New contributions record the signed-in account on the server. Public Thread views
+expose only the contributor's display name and optional photo, never account IDs,
+provider subjects, or credentials. The author stays fixed through retries, reorders,
+and removal. Profile edits update existing bylines without changing song order or
+publication revisions. Historical and signed-out contributions have no recorded author;
+the interface labels them Guest rather than guessing who added them.
+
+Account settings include an editable display name and optional HTTPS photo URL.
+Spotify seeds these from its authenticated profile API; existing connected users are
+imported when they open settings. A failed import leaves settings usable and is retried
+at most hourly. Apple Music's supported API does not expose a user name or photo, so
+Apple-only profiles start as Listener. Linking Spotify can seed an untouched profile;
+a user-edited profile is never overwritten by a provider reconnect or import. Linked
+providers share one profile, with the anchor account's edits taking precedence.
+
+`GET /api/account` includes `profile` and a short-lived `profileBinding`.
+`POST /api/account/profile` accepts `{displayName, avatarUrl, profileBinding}` and
+requires the same signed-in session that loaded the form. Names contain 1–80 characters;
+photos are optional HTTPS URLs, fetched by the browser with no referrer. Migration
+`0011_song_attribution.sql` is additive and must be applied before the updated Worker.
 
 ### Publisher configuration
 

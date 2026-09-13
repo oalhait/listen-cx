@@ -57,12 +57,16 @@ export class D1ThreadStore {
       t.public_capability, t.title, t.revision, t.closed_at,
       (SELECT json_group_array(json_patch(json_object('id', s.id, 'title', s.title, 'artist', s.artist,
         'artworkUrl', s.artwork_url, 'linkSlug', s.link_slug,
+        'addedBy', CASE WHEN s.added_by_account_id IS NULL THEN NULL ELSE json_object(
+          'displayName', COALESCE(s.author_name, 'Listener'), 'avatarUrl', s.author_avatar) END,
         'source', json_object('provider', s.source_provider, 'id', s.source_catalog_id,
         'storefront', s.source_storefront, 'verified', json(CASE s.source_verified WHEN 1 THEN 'true' ELSE 'false' END))),
         COALESCE((SELECT json_object('counterpart', json_object('provider', i.provider, 'id', i.catalog_id,
           'storefront', i.storefront, 'confirmed', json('true'))) FROM thread_identities i WHERE i.contribution_id = s.id), '{}')))
-       FROM (SELECT c.*, l.title, l.artist, l.artwork_url FROM thread_contributions c
-         JOIN links l ON l.slug = c.link_slug WHERE c.thread_id = t.id AND c.removed_at IS NULL
+       FROM (SELECT c.*, l.title, l.artist, l.artwork_url, p.display_name AS author_name, p.avatar_url AS author_avatar
+         FROM thread_contributions c JOIN links l ON l.slug = c.link_slug
+         LEFT JOIN accounts a ON a.id = c.added_by_account_id
+         LEFT JOIN account_profiles p ON p.group_id = a.group_id WHERE c.thread_id = t.id AND c.removed_at IS NULL
          ORDER BY c.sort_order, c.position, c.id) s) AS songs,
       (SELECT json_group_array(json_object('provider', p.provider, 'requestedRevision', p.requested_revision,
         'appliedRevision', p.applied_revision, 'status', p.status, 'blockedReason', p.blocked_reason,
@@ -113,9 +117,9 @@ export class D1ThreadStore {
     return null;
   }
 
-  async add(capability: string, request: MutationRequest & { source: ParsedTrack; track: Resolved }): Promise<MutationReceipt> {
+  async add(capability: string, request: MutationRequest & { source: ParsedTrack; track: Resolved; addedByAccountId?: string | null }): Promise<MutationReceipt> {
     const { source, track } = request;
-    return this.mutate(capability, request, { kind: "add", source }, (db, token, fingerprint) => {
+    return this.mutate(capability, request, { kind: "add", source, addedByAccountId: request.addedByAccountId }, (db, token, fingerprint) => {
       const slug = linkSlug();
       return [
         db.prepare(`INSERT INTO links(slug, title, artist, artwork_url, spotify_url, apple_url, complete)
@@ -123,12 +127,12 @@ export class D1ThreadStore {
           .bind(slug, track.title, track.artist, track.artworkUrl, source.provider === "spotify" ? track.spotifyUrl : null,
             source.provider === "apple" ? track.appleUrl : null, capability, token),
         db.prepare(`INSERT INTO thread_contributions(thread_id, link_slug, request_key, input_fingerprint,
-          source_provider, source_catalog_id, source_storefront, position, sort_order, source_verified)
+          source_provider, source_catalog_id, source_storefront, position, sort_order, source_verified, added_by_account_id)
           SELECT t.id, ?, ?, ?, ?, ?, ?,
             COALESCE((SELECT MAX(position) FROM thread_contributions WHERE thread_id = t.id), 0) + 1,
-            COALESCE((SELECT MAX(sort_order) FROM thread_contributions WHERE thread_id = t.id AND removed_at IS NULL), 0) + 1, 1
+            COALESCE((SELECT MAX(sort_order) FROM thread_contributions WHERE thread_id = t.id AND removed_at IS NULL), 0) + 1, 1, ?
           FROM threads t WHERE t.public_capability = ? AND t.mutation_token = ?`)
-          .bind(slug, normalizeRequestKey(request.requestKey), fingerprint, source.provider, source.id, source.storefront, capability, token),
+          .bind(slug, normalizeRequestKey(request.requestKey), fingerprint, source.provider, source.id, source.storefront, request.addedByAccountId ?? null, capability, token),
       ];
     });
   }

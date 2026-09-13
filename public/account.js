@@ -71,6 +71,86 @@ export function createAccountActions({ returnTo = null, request = threadRequest,
   };
 }
 
+function safeProfilePhoto(value) {
+  if (typeof value !== 'string' || value.length > 2048) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password ? url.href : null;
+  } catch { return null; }
+}
+
+export function createProfileActions({ request = threadRequest, update, profileBinding }) {
+  let pending = false;
+  return {
+    async save(details) {
+      if (pending) return;
+      if (typeof profileBinding !== 'string' || !profileBinding) {
+        update({ status: 'error', message: 'Refresh your account before saving your profile.' });
+        return;
+      }
+      const displayName = typeof details.displayName === 'string' ? details.displayName.trim() : '';
+      const avatarUrl = typeof details.avatarUrl === 'string' ? details.avatarUrl.trim() || null : null;
+      if (!displayName || displayName.length > 80) {
+        update({ status: 'error', message: 'Enter a display name between 1 and 80 characters.' });
+        return;
+      }
+      if (avatarUrl && !safeProfilePhoto(avatarUrl)) {
+        update({ status: 'error', message: 'Use a photo URL that starts with https://, without a username or password (up to 2,048 characters).' });
+        return;
+      }
+      pending = true;
+      update({ status: 'loading', message: 'Saving…' });
+      try {
+        const { profile } = await request('/api/account/profile', { displayName, avatarUrl, profileBinding });
+        if (!profile || typeof profile.displayName !== 'string') throw new Error('Profile unavailable');
+        update({ status: 'success', profile, message: 'Profile saved.' });
+      } catch {
+        update({ status: 'error', message: 'Could not save your profile. Try again. If you signed out, refresh your account first.' });
+      } finally { pending = false; }
+    },
+  };
+}
+
+export function mountAccountProfile(form, data, request = threadRequest) {
+  if (!form) return;
+  form.hidden = !data.account;
+  if (form.hidden) return;
+  const name = form.querySelector('#profile-name');
+  const photo = form.querySelector('#profile-photo');
+  const preview = form.querySelector('#profile-preview');
+  const message = form.querySelector('#profile-message');
+  const button = form.querySelector('button[type="submit"]');
+  const showPhoto = () => {
+    const url = safeProfilePhoto(photo.value.trim());
+    preview.hidden = !url;
+    if (url) preview.src = url;
+    else preview.removeAttribute('src');
+  };
+  const showProfile = profile => {
+    name.value = profile?.displayName || 'Listener';
+    photo.value = profile?.avatarUrl || '';
+    showPhoto();
+  };
+  showProfile(data.profile);
+  preview.addEventListener('error', () => { preview.hidden = true; });
+  photo.addEventListener('change', showPhoto);
+  const actions = createProfileActions({ request, profileBinding: data.profileBinding, update(state) {
+    const busy = state.status === 'loading';
+    form.setAttribute('aria-busy', String(busy));
+    name.disabled = busy;
+    photo.disabled = busy;
+    button.disabled = busy;
+    button.textContent = busy ? 'Saving…' : 'Save profile';
+    message.textContent = state.message;
+    message.dataset.status = state.status;
+    if (state.status === 'success') showProfile(state.profile);
+  } });
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    void actions.save({ displayName: name.value, avatarUrl: photo.value });
+  });
+}
+
 export function waitForAccountMusicKit(window, document) {
   if (window.MusicKit) return Promise.resolve(window.MusicKit);
   return new Promise((resolve, reject) => {
@@ -137,6 +217,7 @@ export async function mountAccount(root) {
     if (!response.ok) throw new Error('Account unavailable');
     data = await response.json();
     find('#account-settings').hidden = !data.account;
+    mountAccountProfile(find('#account-profile'), data);
     const linked = connections();
     for (const provider of ['apple', 'spotify']) {
       const account = linked.find(account => account.provider === provider);

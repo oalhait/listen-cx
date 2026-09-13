@@ -1,6 +1,6 @@
 import { accountPage } from '../src/account-page.ts';
 import { expect, it, vi } from 'vitest';
-import { accountReturn, mountAccount, createAccountActions, prepareAccountAppleMusic, prepareBrowserAppleMusic, prepareSettingsAppleMusic, waitForAccountMusicKit } from './account.js';
+import { accountReturn, mountAccount, mountAccountProfile, createProfileActions, createAccountActions, prepareAccountAppleMusic, prepareBrowserAppleMusic, prepareSettingsAppleMusic, waitForAccountMusicKit } from './account.js';
 
 function setup(overrides = {}) {
   const request = vi.fn().mockResolvedValue({});
@@ -221,4 +221,104 @@ it.each([false, true])('keeps Apple authorization available alongside Spotify (A
     expect(music.authorize).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(window.location.reload).toHaveBeenCalledTimes(1));
   } finally { vi.unstubAllGlobals(); }
+});
+
+
+it('keeps the profile form hidden until a signed-in account is loaded', () => {
+  expect(accountPage()).toContain('id="account-profile" class="account-profile" hidden');
+  expect(accountPage()).toContain('Anyone with a Thread link can see your name and photo.');
+  const form = { hidden: false, querySelector: vi.fn() };
+  mountAccountProfile(form, { account: null, profile: null });
+  expect(form.hidden).toBe(true);
+  expect(form.querySelector).not.toHaveBeenCalled();
+});
+
+it('saves trimmed profile details and uses the server response', async () => {
+  const profile = { displayName: 'Omar', avatarUrl: 'https://example.com/photo.jpg' };
+  const request = vi.fn().mockResolvedValue({ profile });
+  const update = vi.fn();
+  await createProfileActions({ request, update, profileBinding: 'profile-session-a' }).save({ displayName: ' Omar ', avatarUrl: ' https://example.com/photo.jpg ' });
+  expect(request).toHaveBeenCalledExactlyOnceWith('/api/account/profile', { ...profile, profileBinding: 'profile-session-a' });
+  expect(update.mock.calls.map(([state]) => state.status)).toEqual(['loading', 'success']);
+  expect(update).toHaveBeenLastCalledWith({ status: 'success', profile, message: 'Profile saved.' });
+});
+
+it('allows removing a profile photo and rejects unsafe or invalid profile details', async () => {
+  const request = vi.fn().mockResolvedValue({ profile: { displayName: 'Listener', avatarUrl: null } });
+  const update = vi.fn();
+  const actions = createProfileActions({ request, update, profileBinding: 'profile-session-a' });
+  await actions.save({ displayName: 'Listener', avatarUrl: '' });
+  expect(request).toHaveBeenCalledWith('/api/account/profile', { displayName: 'Listener', avatarUrl: null, profileBinding: 'profile-session-a' });
+  request.mockClear();
+  for (const displayName of ['', '  ', 'a'.repeat(81)]) await actions.save({ displayName, avatarUrl: null });
+  for (const avatarUrl of ['javascript:alert(1)', 'http://example.com/a', 'https://user:secret@example.com/a', 'https://example.com/' + 'a'.repeat(2048)]) {
+    await actions.save({ displayName: 'Omar', avatarUrl });
+  }
+  expect(request).not.toHaveBeenCalled();
+  expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'error' }));
+});
+
+it('deduplicates profile saves and permits retry after a private failure', async () => {
+  let fail;
+  const request = vi.fn().mockImplementationOnce(() => new Promise((resolve, reject) => { fail = reject; }))
+    .mockResolvedValue({ profile: { displayName: 'Omar', avatarUrl: null } });
+  const update = vi.fn();
+  const actions = createProfileActions({ request, update, profileBinding: 'profile-session-a' });
+  const profile = { displayName: 'Omar', avatarUrl: null };
+  const pending = actions.save(profile);
+  await actions.save(profile);
+  expect(request).toHaveBeenCalledTimes(1);
+  fail(new Error('private-token'));
+  await pending;
+  expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'error' }));
+  expect(JSON.stringify(update.mock.calls)).not.toContain('private-token');
+  await actions.save(profile);
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'success' }));
+});
+
+it('edits the seeded profile with independent loading, preview, and success state', async () => {
+  const element = () => ({ value: '', hidden: false, disabled: false, dataset: {}, events: {}, textContent: '',
+    setAttribute: vi.fn(), removeAttribute: vi.fn(), addEventListener(name, callback) { this.events[name] = callback; } });
+  const selectors = Object.fromEntries(['#profile-name', '#profile-photo', '#profile-preview', '#profile-message', 'button[type="submit"]'].map(key => [key, element()]));
+  const form = { ...element(), querySelector: selector => selectors[selector] };
+  let finish;
+  const request = vi.fn().mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const data = { account: { provider: 'spotify' }, profileBinding: 'profile-session-a', profile: { displayName: 'Seeded listener', avatarUrl: 'https://example.com/original.jpg' } };
+  mountAccountProfile(form, data, request);
+  data.profileBinding = 'profile-session-b';
+  expect(form.hidden).toBe(false);
+  expect(selectors['#profile-name'].value).toBe('Seeded listener');
+  expect(selectors['#profile-preview'].src).toBe('https://example.com/original.jpg');
+  selectors['#profile-photo'].value = 'javascript:alert(1)';
+  selectors['#profile-photo'].events.change();
+  expect(selectors['#profile-preview'].hidden).toBe(true);
+  expect(selectors['#profile-preview'].removeAttribute).toHaveBeenCalledWith('src');
+  selectors['#profile-name'].value = '  My own name  ';
+  selectors['#profile-photo'].value = '';
+  const event = { preventDefault: vi.fn() };
+  form.events.submit(event);
+  expect(event.preventDefault).toHaveBeenCalled();
+  expect(request).toHaveBeenCalledWith('/api/account/profile', { displayName: 'My own name', avatarUrl: null, profileBinding: 'profile-session-a' });
+  expect(form.setAttribute).toHaveBeenLastCalledWith('aria-busy', 'true');
+  expect(selectors['button[type="submit"]'].disabled).toBe(true);
+  expect(selectors['#profile-name'].disabled).toBe(true);
+  expect(selectors['#profile-message'].textContent).toBe('Saving…');
+  finish({ profile: { displayName: 'My own name', avatarUrl: null } });
+  await vi.waitFor(() => expect(selectors['button[type="submit"]'].disabled).toBe(false));
+  expect(selectors['#profile-name'].value).toBe('My own name');
+  expect(selectors['#profile-name'].disabled).toBe(false);
+  expect(selectors['#profile-message'].textContent).toBe('Profile saved.');
+  expect(form.setAttribute).toHaveBeenLastCalledWith('aria-busy', 'false');
+});
+
+
+it('refuses profile saves without the account snapshot binding', async () => {
+  for (const profileBinding of [undefined, null, '', 123]) {
+    const request = vi.fn();
+    const update = vi.fn();
+    await createProfileActions({ request, update, profileBinding }).save({ displayName: 'Omar', avatarUrl: null });
+    expect(request).not.toHaveBeenCalled();
+    expect(update).toHaveBeenLastCalledWith({ status: 'error', message: 'Refresh your account before saving your profile.' });
+  }
 });

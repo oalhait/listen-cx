@@ -181,3 +181,25 @@ it("keeps sync retries manager-only and allows them after a Thread closes", asyn
   expect((await request(path, { provider: "spotify" }, cookie)).status).toBe(200);
   expect((await threadStore.get(cap))!.revision).toBe(2);
 });
+
+it('attributes additions to the server session and rejects forged authors or cross-account replays', async () => {
+  const { currentAccount } = await import('./account-session.js');
+  const { D1AccountStore } = await import('./account-db.js');
+  const { D1ProfileStore } = await import('./profile-db.js');
+  const { sha256 } = await import('./thread.js');
+  const accounts = new D1AccountStore(env.DB);
+  const owner = await accounts.upsert('spotify', crypto.randomUUID(), 'private');
+  await new D1ProfileStore(env.DB).update(owner.id, { displayName: 'Omar', avatarUrl: null });
+  const token = 'a'.repeat(43);
+  await accounts.createSession(owner.id, await sha256(token), Date.now() + 60000);
+  const authenticatedApp = createApp({ resolver: { resolve }, store: new D1LinkStore(env.DB), threadStore, baseUrl, contributor: c => currentAccount(c, env.DB) });
+  const { cap } = await create();
+  const request = { url: track.spotifyUrl, expectedRevision: 0, requestKey: 'author-route' };
+  const send = (body: unknown, cookie = `listen_account=${token}`) => authenticatedApp.request(baseUrl + `/api/threads/${cap}/contributions`, { method: 'POST', headers: { Origin: baseUrl, 'Content-Type': 'application/json', 'X-Listen-Action': 'thread', Cookie: cookie }, body: JSON.stringify(body) });
+  expect((await send({ ...request, addedByAccountId: owner.id })).status).toBe(400);
+  expect((await send(request)).status).toBe(200);
+  expect((await send(request)).status).toBe(200);
+  expect((await send(request, '')).status).toBe(409);
+  expect((await threadStore.get(cap))!.contributions[0]!.addedBy).toEqual({ displayName: 'Omar', avatarUrl: null });
+  expect(resolve).toHaveBeenCalledTimes(1);
+});

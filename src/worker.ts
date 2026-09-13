@@ -1,3 +1,4 @@
+import { currentAccount } from "./account-session.js";
 import { ThreadHistoryService, createThreadHistoryApp } from "./thread-history-app.js";
 import { Hono } from "hono";
 import { createAccountApp } from "./account-app.js";
@@ -78,6 +79,7 @@ export default {
       baseUrl,
       connections,
       history,
+      contributor: c => currentAccount(c, env.DB),
       publishing: {
         accountSubscriptions: env.ACCOUNT_SUBSCRIPTIONS_ENABLED === "true",
         availableProviders: availableConnections(env),

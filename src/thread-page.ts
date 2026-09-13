@@ -24,8 +24,23 @@ export function threadCreationPage(): string {
     <p id="thread-message" class="form-message" role="status"></p><p class="thread-note">Songs are saved here. Connect your music account in settings, then subscribe to a Thread for your own playlist.</p></main>`);
 }
 
+function contributor(song: ThreadContribution): string {
+  const name = song.addedBy?.displayName || "Guest";
+  let photo = "";
+  const value = song.addedBy?.avatarUrl;
+  if (value && value.length <= 2048) {
+    try {
+      const url = new URL(value);
+      if (url.protocol === "https:" && !url.username && !url.password) {
+        photo = `<img class="contributor-avatar" src="${escape(url.href)}" alt="" width="20" height="20" loading="lazy" referrerpolicy="no-referrer">`;
+      }
+    } catch {}
+  }
+  return `<span class="song-contributor">${photo}<span>Added by ${escape(name)}</span></span>`;
+}
+
 function songRow(song: ThreadContribution, index: number, count: number, managed: boolean): string {
-  return `<li class="thread-song" data-contribution-id="${song.id}">${artwork(song.artworkUrl)}<div class="track-meta"><a href="/${encodeURIComponent(song.linkSlug)}"><strong>${escape(song.title)}</strong></a><span>${escape(song.artist)}</span></div>${managed ? `<div class="song-actions"><button type="button" data-move="up" data-id="${song.id}" aria-label="Move ${escape(song.title)} up" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" data-move="down" data-id="${song.id}" aria-label="Move ${escape(song.title)} down" ${index === count - 1 ? "disabled" : ""}>↓</button><button type="button" data-remove="${song.id}" aria-label="Remove ${escape(song.title)}">Remove</button></div>` : ""}</li>`;
+  return `<li class="thread-song" data-contribution-id="${song.id}">${artwork(song.artworkUrl)}<div class="track-meta"><a href="/${encodeURIComponent(song.linkSlug)}"><strong>${escape(song.title)}</strong></a><span>${escape(song.artist)}</span>${contributor(song)}</div>${managed ? `<div class="song-actions"><button type="button" data-move="up" data-id="${song.id}" aria-label="Move ${escape(song.title)} up" ${index === 0 ? "disabled" : ""}>↑</button><button type="button" data-move="down" data-id="${song.id}" aria-label="Move ${escape(song.title)} down" ${index === count - 1 ? "disabled" : ""}>↓</button><button type="button" data-remove="${song.id}" aria-label="Remove ${escape(song.title)}">Remove</button></div>` : ""}</li>`;
 }
 
 function publicationCard(publication: PublicationStatus, canRetry: boolean): string {

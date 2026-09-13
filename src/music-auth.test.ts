@@ -125,16 +125,16 @@ describe("Spotify account authorization", () => {
 
   it("reads the actual account identity and falls back to its id when no display name is present", async () => {
     const fetcher = respond({ id: "account-1", display_name: "Omar" }, { id: "account-1", display_name: null });
-    await expect(getSpotifyAccount("access-secret", fetcher)).resolves.toEqual({ id: "account-1", label: "Omar", accountId: "account-1" });
-    await expect(getSpotifyAccount("access-secret", fetcher)).resolves.toEqual({ id: "account-1", label: "account-1", accountId: "account-1" });
+    await expect(getSpotifyAccount("access-secret", fetcher)).resolves.toEqual({ id: "account-1", label: "Omar", accountId: "account-1", profile: { displayName: "Omar", avatarUrl: null } });
+    await expect(getSpotifyAccount("access-secret", fetcher)).resolves.toEqual({ id: "account-1", label: "account-1", accountId: "account-1", profile: { displayName: "Listener", avatarUrl: null } });
     expect(fetcher.mock.calls[0]![0]).toBe("https://api.spotify.com/v1/me");
     expect(new Headers(fetcher.mock.calls[0]![1]?.headers).get("Authorization")).toBe("Bearer access-secret");
   });
 
   it("preserves the immutable account identity when the playlist-owner id changes", async () => {
     const fetcher = respond({ account_id: "aB3dE5fG7h", id: "before", display_name: "Omar" }, { account_id: "aB3dE5fG7h", id: "after", display_name: "Omar" });
-    await expect(getSpotifyAccount("access-secret", fetcher)).resolves.toEqual({ accountId: "aB3dE5fG7h", id: "before", label: "Omar" });
-    await expect(getSpotifyAccount("access-secret", fetcher)).resolves.toEqual({ accountId: "aB3dE5fG7h", id: "after", label: "Omar" });
+    await expect(getSpotifyAccount("access-secret", fetcher)).resolves.toEqual({ accountId: "aB3dE5fG7h", id: "before", label: "Omar", profile: { displayName: "Omar", avatarUrl: null } });
+    await expect(getSpotifyAccount("access-secret", fetcher)).resolves.toEqual({ accountId: "aB3dE5fG7h", id: "after", label: "Omar", profile: { displayName: "Omar", avatarUrl: null } });
   });
 
   it.each(["", null, 42, "bad\nid", "x".repeat(257)])("rejects invalid immutable account identifiers instead of falling back", async accountId => {

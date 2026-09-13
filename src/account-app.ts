@@ -1,3 +1,4 @@
+import { D1ProfileStore } from "./profile-db.js";
 import { Hono, type Context } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { D1AccountStore, type Account, type Subscription } from "./account-db.js";
@@ -33,6 +34,7 @@ export function publicSubscription(value: Subscription | null) {
 export function createAccountApp(env: RuntimeEnv, baseUrl: string, onChange: (capability: string) => void) {
   const app = new Hono();
   const store = new D1AccountStore(env.DB);
+  const profiles = new D1ProfileStore(env.DB);
   const origin = new URL(baseUrl).origin;
   const appleAvailable = () => availableConnections(env).includes("apple");
   const current = (c: Context) => currentAccount(c, env.DB);
@@ -61,15 +63,15 @@ export function createAccountApp(env: RuntimeEnv, baseUrl: string, onChange: (ca
     }
     return parsed.value;
   }
-  async function binding(c: Context, account: Account): Promise<string> {
-    return JSON.stringify(await seal(env.PUBLISHER_ENCRYPTION_KEY!, "apple-library-grant", {
+  async function binding(c: Context, account: Account, purpose = "apple-library-grant"): Promise<string> {
+    return JSON.stringify(await seal(env.PUBLISHER_ENCRYPTION_KEY!, purpose, {
       accountId: account.id, sessionHash: await sha256(getCookie(c, sessionCookie)!), expiresAt: Date.now() + 1800000,
     }));
   }
-  async function validateBinding(c: Context, account: Account, value: unknown) {
+  async function validateBinding(c: Context, account: Account, value: unknown, purpose = "apple-library-grant") {
     if (typeof value !== "string" || value.length > 2000) throw new ThreadError(403, "session_changed", "Your account changed. Refresh settings before connecting music.");
     try {
-      const grant = await unseal<{ accountId: string; sessionHash: string; expiresAt: number }>(env.PUBLISHER_ENCRYPTION_KEY!, "apple-library-grant", JSON.parse(value));
+      const grant = await unseal<{ accountId: string; sessionHash: string; expiresAt: number }>(env.PUBLISHER_ENCRYPTION_KEY!, purpose, JSON.parse(value));
       if (grant.accountId !== account.id || grant.sessionHash !== await sha256(getCookie(c, sessionCookie)!)
         || !Number.isSafeInteger(grant.expiresAt) || grant.expiresAt <= Date.now()) throw new Error();
     } catch { throw new ThreadError(403, "session_changed", "Your account changed. Refresh settings before connecting music."); }
@@ -113,10 +115,26 @@ export function createAccountApp(env: RuntimeEnv, baseUrl: string, onChange: (ca
   app.get("/api/account", async c => {
     const account = await current(c);
     const connections = account ? await store.connections(account.id) : [];
-    return c.json({ account: account ? publicAccount(account) : null, connections: connections.map(publicAccount),
+    const spotify = connections.find(value => value.provider === "spotify" && value.credentials);
+    if (spotify && await profiles.claimSeed(spotify.id)) {
+      try {
+        const token = await env.THREAD_PUBLISHER.getByName(`account_${spotify.id}`).getAccountSpotifyToken(spotify.id);
+        const provider = await getSpotifyAccount(token);
+        if (provider.accountId === spotify.subject) await profiles.seed(spotify.id, provider.profile);
+      } catch {}
+    }
+    return c.json({ account: account ? publicAccount(account) : null, profile: account ? await profiles.get(account.id) : null,
+      connections: connections.map(publicAccount),
+      profileBinding: account ? await binding(c, account, "profile-edit-grant") : null,
       authorizationBinding: account ? await binding(c, account) : null,
       available: { spotify: availableConnections(env).includes("spotify"), apple: appleAvailable() },
       subscriptions: (await Promise.all(connections.map(value => store.subscriptions(value.id)))).flat().map(publicSubscription) });
+  });
+  app.post("/api/account/profile", async c => {
+    const account = await signedIn(c);
+    const body = await fields(c, ["displayName", "avatarUrl", "profileBinding"]);
+    await validateBinding(c, account, body.profileBinding, "profile-edit-grant");
+    return c.json({ profile: await profiles.update(account.id, { displayName: body.displayName, avatarUrl: body.avatarUrl }) });
   });
   app.post("/account/sign-out", async c => {
     await fields(c, []);
@@ -171,6 +189,7 @@ export function createAccountApp(env: RuntimeEnv, baseUrl: string, onChange: (ca
         const tokens = await exchangeSpotifyCode({ clientId: env.SPOTIFY_CLIENT_ID!, code, verifier: pending.verifier, redirectUri: pending.redirectUri });
         const profile = await getSpotifyAccount(tokens.accessToken);
         account = await store.upsert("spotify", profile.accountId, profile.label);
+        await profiles.seed(account.id, profile.profile);
         credentials = { clientId: env.SPOTIFY_CLIENT_ID!, accountId: profile.accountId, tokens };
       } else {
         const { exchangeAppleSignIn } = await import("./apple-sign-in.js");
