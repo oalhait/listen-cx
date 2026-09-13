@@ -5,6 +5,8 @@ export interface CatalogTrack {
   title: string;
   artist: string;
   album: string | null;
+  releaseDate?: string | null;
+  albumId?: string | null;
   durationMs: number | null;
   isrc: string | null;
   explicit: boolean | null;
@@ -19,7 +21,7 @@ export interface MatchResult {
   reason: string;
 }
 
-export const MATCHER_VERSION = "catalog-v1";
+export const MATCHER_VERSION = "catalog-v2";
 
 function normalized(value: string): string {
   return value.normalize("NFKC").toLowerCase().replace(/[\p{P}\p{S}]+/gu, " ").replace(/\s+/g, " ").trim();
@@ -39,6 +41,14 @@ function featuredCredits(title: string): string[] {
 
 function compatibleArtists(a: CatalogTrack, b: CatalogTrack): boolean {
   if (artistKey(a.artist) === artistKey(b.artist)) return true;
+  const sameAlbum = a.album !== null && b.album !== null && normalized(a.album) === normalized(b.album);
+  const msAlias = (left: string, right: string) => {
+    const leftCredits = artistCredits(left);
+    const rightCredits = artistCredits(right);
+    return leftCredits.length === 1 && rightCredits.length === 1 && leftCredits[0]!.startsWith("ms ")
+      && leftCredits[0]!.slice(3) === rightCredits[0] && rightCredits[0]!.includes(" ");
+  };
+  if (sameAlbum && (msAlias(a.artist, b.artist) || msAlias(b.artist, a.artist))) return true;
   const featured = featuredCredits(a.title);
   if (!featured.length || featured.join("\0") !== featuredCredits(b.title).join("\0")) return false;
   const aCredits = artistCredits(a.artist);
@@ -92,13 +102,17 @@ export function selectTrackMatch(source: CatalogTrack, candidates: CatalogTrack[
     else groups.push([candidate]);
   }
   const suggestions = groups.map((members) => members[0]!);
-  const selected = suggestions.length === 1 && sufficient(suggestions[0]!) ? suggestions[0]! : null;
-  const reason = !suggestions.length
+  const albumSuggestions = method === "metadata" && sourceIsrc === null && source.album !== null ? suggestions.filter(albumMatch) : [];
+  const releaseSuggestions = source.releaseDate ? albumSuggestions.filter(candidate => candidate.releaseDate === source.releaseDate) : [];
+  const narrowed = suggestions.length > 1 && albumSuggestions.length > 0 && albumSuggestions.every(candidate => candidate.releaseDate)
+    && releaseSuggestions.length === 1 ? releaseSuggestions : suggestions;
+  const selected = narrowed.length === 1 && sufficient(narrowed[0]!) ? narrowed[0]! : null;
+  const reason = !narrowed.length
     ? "No playable candidate passed title, artist, recording-version, explicitness, and duration guards."
-    : suggestions.length > 1
+    : narrowed.length > 1
       ? "Multiple distinct recording identities remain; select a candidate."
       : !selected
         ? "Matching metadata lacks known duration or compatible content ratings; confirmation is required."
-        : `${method === "isrc" ? "Shared ISRC and compatible recording metadata" : "Matching normalized title, artist, duration, and compatible content ratings"}; duration tolerance is the smaller of 3 seconds and 2% of source duration.`;
-  return { status: selected ? "matched" : suggestions.length ? "ambiguous" : "unavailable", method, selected, candidates: suggestions, reason };
+        : `${method === "isrc" ? "Shared ISRC and compatible recording metadata" : releaseSuggestions.length === 1 ? "Matching normalized title, artist, album release, duration, and compatible content ratings" : "Matching normalized title, artist, duration, and compatible content ratings"}; duration tolerance is the smaller of 3 seconds and 2% of source duration.`;
+  return { status: selected ? "matched" : narrowed.length ? "ambiguous" : "unavailable", method, selected, candidates: narrowed, reason };
 }

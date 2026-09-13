@@ -17,8 +17,9 @@ export async function resolveAutomaticMatches(
     if (entry.identity.status !== 'unresolved' || entry.identity.reason !== 'cross_provider_identity_unresolved') continue;
     const song = view.contributions.find(song => song.id === entry.contributionId)!;
     const saved = await db.withSession('first-primary').prepare(`SELECT result_json FROM automatic_track_matches
-      WHERE publisher_key = ? AND contribution_id = ? AND provider = ? AND (status = 'matched' OR attempted_revision = ?)`)
-      .bind(target.publisherKey, song.id, target.provider, view.revision).first<string>('result_json');
+      WHERE publisher_key = ? AND contribution_id = ? AND provider = ?
+      AND (status = 'matched' OR (matcher_version = ? AND attempted_revision = ?))`)
+      .bind(target.publisherKey, song.id, target.provider, MATCHER_VERSION, view.revision).first<string>('result_json');
     let result: MatchResult;
     if (saved) result = JSON.parse(saved);
     else {

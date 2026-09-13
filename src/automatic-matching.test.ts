@@ -5,6 +5,7 @@ import { D1ThreadStore } from './thread-db.js';
 import { D1PublicationStore } from './publication-db.js';
 import { authorizeManagementCapability } from './thread-security.js';
 import { resolveAutomaticMatches } from './automatic-matching.js';
+import { MATCHER_VERSION } from './track-matching.js';
 
 const selected = { provider: 'spotify' as const, id: 'a'.repeat(22), storefront: 'us', title: 'Song', artist: 'Artist', album: null, durationMs: 180000, isrc: 'USABC2600001', explicit: false, playable: true };
 const result = { status: 'matched' as const, method: 'isrc' as const, selected, candidates: [selected], reason: 'same_recording' };
@@ -78,6 +79,18 @@ it('rechecks uncertain candidates after a requested retry while retaining accept
   await new D1PublicationStore(env.DB).retry(auth, 'spotify');
   await resolveAutomaticMatches(env.DB, view, target, client, 'us');
   expect(client.findMatch).toHaveBeenCalledTimes(2);
+});
+
+it('rechecks an unresolved result from an older matcher version at the same revision', async () => {
+  const { target, view } = await setup();
+  const stale = { ...result, status: 'ambiguous' as const, selected: null };
+  await env.DB.prepare(`INSERT INTO automatic_track_matches
+    (publisher_key, contribution_id, provider, storefront, matcher_version, attempted_revision, status, result_json)
+    VALUES (?, ?, 'spotify', 'us', ?, ?, 'ambiguous', ?)`)
+    .bind(target.publisherKey, view.contributions[0]!.id, `${MATCHER_VERSION}-old`, view.revision, JSON.stringify(stale)).run();
+  const client = catalog();
+  expect((await resolveAutomaticMatches(env.DB, view, target, client, 'us')).identitiesComplete).toBe(true);
+  expect(client.findMatch).toHaveBeenCalledTimes(1);
 });
 
 it('keeps subscriber retry caches scoped to the requested account', async () => {

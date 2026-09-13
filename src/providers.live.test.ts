@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { SpotifyClient } from "./spotify.js";
 import { ItunesClient } from "./itunes.js";
+import { MusicCatalog } from "./music-catalog.js";
 
 it.each([
   ["4SN5Kkig8iJ8vdwsOoP7IO", "Cataracts", "Freddie Gibbs, Madlib"],
@@ -27,4 +28,22 @@ it("reads the live Apple page when the lookup endpoint is unavailable", async ()
   expect(await apple.lookupById("1452886612")).toMatchObject({
     trackId: 1452886612, title: "Kingston", artist: "Faye Webster",
   });
+});
+
+it("matches the two Spotify sources that blocked the Apple wedding playlist", async () => {
+  const response = await fetch("https://listen.cx/api/apple-music/developer-token");
+  expect(response.ok).toBe(true);
+  const developerToken = (await response.json() as { developerToken?: string }).developerToken;
+  expect(developerToken).toBeTypeOf("string");
+  if (!developerToken) throw new Error("Apple developer token missing");
+  const catalog = new MusicCatalog({ appleDeveloperToken: developerToken, fetcher: (input, init) => {
+    const headers = new Headers(init?.headers);
+    if (new URL(String(input)).hostname === "api.music.apple.com") headers.set("Origin", "https://listen.cx");
+    return fetch(input, { ...init, headers });
+  } });
+  for (const [id, expected] of [["7EcE5yCPVZaZut1JqowbcI", "1614548303"], ["2GFExyKXf9383tSRSrEHEt", "1276760758"]] as const) {
+    const source = await catalog.get({ provider: "spotify", id, storefront: "us" });
+    expect(source).not.toBeNull();
+    expect(await catalog.findMatch(source!, "apple", "us")).toMatchObject({ status: "matched", selected: { id: expected } });
+  }
 });

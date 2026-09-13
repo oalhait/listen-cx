@@ -50,6 +50,24 @@ describe("selectTrackMatch", () => {
     expect(result.candidates).toHaveLength(2);
   });
 
+  it("uses exact album release evidence to distinguish metadata-only releases without overriding a known ISRC", () => {
+    const spotifySource: CatalogTrack = { provider: "spotify", id: "7EcE5yCPVZaZut1JqowbcI", storefront: "us", title: "Faneto", artist: "Chief Keef", album: "Back from the Dead 2", releaseDate: "2015-06-16", durationMs: 206654, isrc: null, explicit: true, playable: true };
+    const single: CatalogTrack = { ...spotifySource, provider: "apple", id: "1614504695", album: "Faneto - Single", durationMs: 206655, isrc: "USZEG1500799" };
+    const currentAlbum: CatalogTrack = { ...spotifySource, provider: "apple", id: "1614548303", durationMs: 206655, isrc: "USZEG1500799" };
+    const originalAlbum: CatalogTrack = { ...spotifySource, provider: "apple", id: "930701578", releaseDate: "2014-10-31", durationMs: 206602, isrc: "USAE81401954" };
+    expect(selectTrackMatch(spotifySource, [single, originalAlbum, currentAlbum], "metadata")).toMatchObject({ status: "matched", selected: currentAlbum, candidates: [currentAlbum] });
+    expect(selectTrackMatch({ ...spotifySource, releaseDate: null }, [single, originalAlbum, currentAlbum], "metadata")).toMatchObject({ status: "ambiguous", selected: null });
+    expect(selectTrackMatch({ ...spotifySource, isrc: single.isrc }, [single, originalAlbum, currentAlbum], "metadata")).toMatchObject({ status: "ambiguous", selected: null });
+  });
+
+  it("accepts Spotify's multi-token Ms. artist prefix without treating one-word stage names as aliases", () => {
+    const lauryn = track({ provider: "spotify", id: "2GFExyKXf9383tSRSrEHEt", title: "Can't Take My Eyes Off of You - (I Love You Baby)", artist: "Ms. Lauryn Hill", album: "The Miseducation of Lauryn Hill", durationMs: 221466, isrc: null, explicit: false });
+    const apple = { ...lauryn, provider: "apple" as const, id: "1276760758", title: "Can't Take My Eyes Off of You (I Love You Baby)", artist: "Lauryn Hill", durationMs: 221467 };
+    expect(selectTrackMatch(lauryn, [apple], "metadata")).toMatchObject({ status: "matched", selected: apple });
+    expect(selectTrackMatch(lauryn, [{ ...apple, album: "Other Album" }], "metadata").status).toBe("unavailable");
+    expect(selectTrackMatch({ ...lauryn, artist: "Ms. Dynamite" }, [{ ...apple, artist: "Dynamite" }], "metadata").status).toBe("unavailable");
+  });
+
   it("rejects unplayable tracks, conflicting explicitness, duration, and artist", () => {
     for (const changes of [{ playable: false }, { explicit: true }, { durationMs: 203001 }, { artist: "Other" }]) {
       expect(selectTrackMatch(source, [track(changes)], "metadata").status).toBe("unavailable");

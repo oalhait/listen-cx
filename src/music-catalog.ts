@@ -58,6 +58,22 @@ function normalizedIsrc(value: string | null): string | null {
   return normalized && /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/.test(normalized) ? normalized : null;
 }
 
+function releaseDate(value: unknown): string | null {
+  const parsed = optionalString(value);
+  return parsed && /^\d{4}(?:-\d{2}(?:-\d{2})?)?$/.test(parsed) ? parsed : null;
+}
+
+function appleAlbumId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    const match = url.hostname === "music.apple.com" ? url.pathname.match(/\/album\/[^/]+\/(\d+)\/?$/) : null;
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function parseApple(value: unknown, storefront: string): CatalogTrack {
   const item = object(value);
   const id = string(item.id);
@@ -65,7 +81,7 @@ function parseApple(value: unknown, storefront: string): CatalogTrack {
   const attributes = object(item.attributes);
   const rating = optionalString(attributes.contentRating);
   const playParams = attributes.playParams === undefined ? null : object(attributes.playParams);
-  return { provider: "apple", id, storefront, title: string(attributes.name), artist: string(attributes.artistName), album: optionalString(attributes.albumName), durationMs: duration(attributes.durationInMillis), isrc: normalizedIsrc(optionalString(attributes.isrc)), explicit: rating === "explicit" ? true : rating === "clean" ? false : null, playable: playParams?.kind === "song" && typeof playParams.id === "string" };
+  return { provider: "apple", id, storefront, title: string(attributes.name), artist: string(attributes.artistName), album: optionalString(attributes.albumName), albumId: appleAlbumId(attributes.url), durationMs: duration(attributes.durationInMillis), isrc: normalizedIsrc(optionalString(attributes.isrc)), explicit: rating === "explicit" ? true : rating === "clean" ? false : null, playable: playParams?.kind === "song" && typeof playParams.id === "string" };
 }
 
 function parseSpotify(value: unknown, storefront: string): CatalogTrack {
@@ -77,7 +93,7 @@ function parseSpotify(value: unknown, storefront: string): CatalogTrack {
   const restrictions = item.restrictions === undefined ? null : object(item.restrictions);
   const externalIds = item.external_ids === undefined ? null : object(item.external_ids);
   const album = item.album === undefined || item.album === null ? null : object(item.album);
-  return { provider: "spotify", id, storefront, title: string(item.name), artist: artists.join(", "), album: optionalString(album?.name), durationMs: duration(item.duration_ms), isrc: normalizedIsrc(optionalString(externalIds?.isrc)), explicit: explicit(item.explicit), playable: item.is_playable === true && item.is_local !== true && (!restrictions || Object.keys(restrictions).length === 0) };
+  return { provider: "spotify", id, storefront, title: string(item.name), artist: artists.join(", "), album: optionalString(album?.name), releaseDate: releaseDate(album?.release_date), durationMs: duration(item.duration_ms), isrc: normalizedIsrc(optionalString(externalIds?.isrc)), explicit: explicit(item.explicit), playable: item.is_playable === true && item.is_local !== true && (!restrictions || Object.keys(restrictions).length === 0) };
 }
 
 function responseError(response: Response): MusicCatalogError {
@@ -106,7 +122,7 @@ export class MusicCatalog {
     const storefront = storefrontKey(source.storefront);
     if (source.provider === "spotify" && !this.options.spotifyAccessToken) {
       const track = await new SpotifyClient(this.publicFetcher).getTrack(source.id);
-      return track ? { provider: "spotify", id: track.id, storefront, title: string(track.title), artist: string(track.artist), album: null, durationMs: duration(track.durationMs), isrc: null, explicit: track.explicit ?? null, playable: track.playable === true } : null;
+      return track ? { provider: "spotify", id: track.id, storefront, title: string(track.title), artist: string(track.artist), album: optionalString(track.album), releaseDate: track.releaseDate ?? null, durationMs: duration(track.durationMs), isrc: null, explicit: track.explicit ?? null, playable: track.playable === true } : null;
     }
     if (source.provider === "apple" && !this.options.appleDeveloperToken) {
       const track = await new ItunesClient(this.publicFetcher).lookupById(source.id, storefront);
@@ -133,7 +149,25 @@ export class MusicCatalog {
       const result = selectTrackMatch(source, await this.search(source, destination, storefront, isrc), "isrc");
       if (result.status !== "unavailable") return result;
     }
-    return selectTrackMatch(source, await this.search(source, destination, storefront, null), "metadata");
+    let result = selectTrackMatch(source, await this.search(source, destination, storefront, null), "metadata");
+    if (destination === "apple" && result.status === "ambiguous" && source.isrc === null && source.album && source.releaseDate
+      && result.candidates.length > 1 && result.candidates.length <= 5) {
+      result = selectTrackMatch(source, await Promise.all(result.candidates.map(candidate => this.withAppleAlbumRelease(candidate, storefront))), "metadata");
+    }
+    return result;
+  }
+
+  private async withAppleAlbumRelease(track: CatalogTrack, storefront: string): Promise<CatalogTrack> {
+    if (track.provider !== "apple" || !track.albumId) return track;
+    const data = await this.request("apple", new URL(`https://api.music.apple.com/v1/catalog/${storefront}/albums/${track.albumId}`));
+    if (data === null) return track;
+    const albums = list(object(data).data, 1);
+    if (!albums.length) return track;
+    const album = object(albums[0]);
+    if (album.type !== "albums" || album.id !== track.albumId) throw new MusicCatalogError("Invalid Apple catalog album identity", 502);
+    const attributes = object(album.attributes);
+    if (string(attributes.name) !== track.album) return track;
+    return { ...track, releaseDate: releaseDate(attributes.releaseDate) };
   }
 
   private async search(source: CatalogTrack, provider: Provider, storefront: string, isrc: string | null): Promise<CatalogTrack[]> {

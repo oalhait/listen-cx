@@ -12,9 +12,10 @@ describe("MusicCatalog", () => {
     const fetcher: typeof fetch = async function (this: unknown, input) {
       expect(this).toBeUndefined();
       if (String(input).includes("/oembed")) return Response.json({ title: "Song" });
+      if (!String(input).includes('/embed/')) return new Response(`<meta property="og:url" content="https://open.spotify.com/track/${spotifyId}"><meta property="og:description" content="Artist · Album · Song · 2026">`);
       return new Response(`<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { state: { data: { entity: { type: "track", id: spotifyId, title: "Song", artists: [{ name: "Artist" }], duration: 200000, isExplicit: false, isPlayable: true } } } } } })}</script>`);
     };
-    expect(await new MusicCatalog({ fetcher }).get({ provider: "spotify", id: spotifyId, storefront: "us" })).toMatchObject({ explicit: false, playable: true, durationMs: 200000, isrc: null });
+    expect(await new MusicCatalog({ fetcher }).get({ provider: "spotify", id: spotifyId, storefront: "us" })).toMatchObject({ album: 'Album', explicit: false, playable: true, durationMs: 200000, isrc: null });
   });
 
   it("uses Apple metadata search when source ISRC is unknown", async () => {
@@ -26,9 +27,33 @@ describe("MusicCatalog", () => {
     expect(url.searchParams.get("term")).toBe("Song Artist");
   });
 
+  it("enriches a small ambiguous Apple set with album release evidence", async () => {
+    const older = apple({ albumName: "Back from the Dead 2", durationInMillis: 206602, isrc: "USAE81401954", url: "https://music.apple.com/us/album/faneto/930701525?i=930701578" });
+    const current = apple({ albumName: "Back from the Dead 2", durationInMillis: 206655, isrc: "USZEG1500799", url: "https://music.apple.com/us/album/faneto/1614548299?i=1614548303" });
+    const item = (id: string, value: ReturnType<typeof apple>) => ({ ...value, id });
+    const fetcher = vi.fn<typeof fetch>(async input => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/albums/930701525")) return Response.json({ data: [{ id: "930701525", type: "albums", attributes: { name: "Back from the Dead 2", releaseDate: "2014-10-31" } }] });
+      if (url.pathname.endsWith("/albums/1614548299")) return Response.json({ data: [{ id: "1614548299", type: "albums", attributes: { name: "Back from the Dead 2", releaseDate: "2015-06-16" } }] });
+      return Response.json({ results: { songs: { data: [item("930701578", older), item("1614548303", current)] } } });
+    });
+    const spotifySource: CatalogTrack = { provider: "spotify", id: spotifyId, storefront: "us", title: "Song", artist: "Artist", album: "Back from the Dead 2", releaseDate: "2015-06-16", durationMs: 206654, isrc: null, explicit: false, playable: true };
+    expect(await new MusicCatalog({ appleDeveloperToken: "token", fetcher }).findMatch(spotifySource, "apple", "us")).toMatchObject({ status: "matched", selected: { id: "1614548303" } });
+  });
+
   it("does not turn public source throttling into missing metadata", async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => new Response(null, { status: 429, headers: { "Retry-After": "23" } }));
     await expect(new MusicCatalog({ fetcher }).get({ provider: "spotify", id: spotifyId, storefront: "us" })).rejects.toMatchObject({ status: 429, retryAfterSeconds: 23 });
+  });
+
+  it("preserves a catalog rate limit from the optional Spotify track page", async () => {
+    const fetcher = vi.fn<typeof fetch>(async input => {
+      const url = String(input);
+      if (url.includes("/oembed")) return Response.json({ title: "Song" });
+      if (!url.includes("/embed/")) return new Response(null, { status: 429, headers: { "Retry-After": "19" } });
+      return new Response(`<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { state: { data: { entity: { type: "track", id: spotifyId, title: "Song", artists: [{ name: "Artist" }], duration: 200000, isExplicit: false, isPlayable: true } } } } } })}</script>`);
+    });
+    await expect(new MusicCatalog({ fetcher }).get({ provider: "spotify", id: spotifyId, storefront: "us" })).rejects.toMatchObject({ status: 429, retryAfterSeconds: 19 });
   });
 
   it("fetches authenticated source metadata with destination market and bearer token", async () => {

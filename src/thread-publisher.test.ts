@@ -406,6 +406,7 @@ it.each(["none", "valid", "revoked", "source401", "source403", "source429"] as c
       expect(headers.get("Authorization")).toBeNull();
       publicReads++;
       if (url.pathname === "/oembed") return Response.json({ title: "Unreliable oEmbed title" });
+      if (url.pathname === `/track/${f.sourceId}`) return new Response(`<meta property="og:url" content="https://open.spotify.com/track/${f.sourceId}"><meta property="og:description" content="Artist · Album · Song · 2026"><meta name="music:release_date" content="2026-01-01">`);
       expect(url.pathname).toBe(`/embed/track/${f.sourceId}`);
       return new Response(`<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { state: { data: { entity: {
         id: f.sourceId, type: "track", title: "Song", artists: [{ name: "Artist" }], duration: 180000, isExplicit: true, isPlayable: true,
@@ -459,7 +460,7 @@ it.each(["none", "valid", "revoked", "source401", "source403", "source429"] as c
   expect(await accounts.subscription(account.accountId, f.cap)).toMatchObject({ status: "synced", appliedRevision: 1,
     verifiedPlaylistId: "p.matched", verifiedPlaylistUrl: "https://music.apple.com/gb/playlist/pl.matched" });
   expect({ searches, creates, reads, preflights, publicReads, authenticatedSourceReads, refreshes }).toEqual({ searches: 1, creates: 1, reads: 2,
-    preflights: 1, publicReads: sourceIsrc ? 0 : 2, authenticatedSourceReads: linkedSpotify && spotifyState !== "revoked" ? 1 : 0, refreshes: linkedSpotify ? 1 : 0 });
+    preflights: 1, publicReads: sourceIsrc ? 0 : 3, authenticatedSourceReads: linkedSpotify && spotifyState !== "revoked" ? 1 : 0, refreshes: linkedSpotify ? 1 : 0 });
   const evidence = await env.DB.prepare("SELECT storefront, status, result_json FROM automatic_track_matches WHERE publisher_key = ?")
     .bind(subscription.publisherKey).first<{ storefront: string; status: string; result_json: string }>();
   expect(evidence).toMatchObject({ storefront: "gb", status: "matched" });
