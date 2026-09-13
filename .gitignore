@@ -8,3 +8,8 @@ data/*.db-shm
 data/*.db-wal
 worker-startup.cpuprofile
 .claude/deez/
+
+spikes/**/.build/
+spikes/**/.local/
+spikes/**/DerivedData/
+**/xcuserdata/

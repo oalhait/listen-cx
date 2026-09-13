@@ -54,6 +54,7 @@ async function managementAuthorization(
 describe("D1JamStore", () => {
   beforeEach(async () => {
     await env.DB.prepare("DELETE FROM thread_contributions").run();
+    await env.DB.prepare("DELETE FROM thread_publications").run();
     await env.DB.prepare("DELETE FROM threads").run();
     await env.DB.prepare("DELETE FROM links").run();
     await seedLink();

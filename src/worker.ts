@@ -16,10 +16,11 @@ import {
   type AppleMusicAuthEnv,
 } from "./apple-music-auth.js";
 
-type ListenEnv = Env & AppleMusicAuthEnv;
 import { availableConnections, type PublishingSecrets } from "./publishing-bindings.js";
 import { createMusicConnectionsApp, requireMusicConnection } from "./music-connections-app.js";
 import { wakeDue } from "./thread-publisher.js";
+
+type ListenEnv = Env & AppleMusicAuthEnv;
 
 export { ThreadPublisher } from "./thread-publisher.js";
 

@@ -284,9 +284,9 @@ photo storage; provider-seeded HTTPS photos remain supported. Migration
 
 ### Publisher configuration
 
-The staging configuration enables `ACCOUNT_SUBSCRIPTIONS_ENABLED`,
-`MUSIC_ACCOUNT_CONNECTIONS_ENABLED`, and both publishing flags. Base and dev
-publishing remains disabled. App configuration does not preauthorize any person.
+The production and staging configurations enable `ACCOUNT_SUBSCRIPTIONS_ENABLED`,
+`MUSIC_ACCOUNT_CONNECTIONS_ENABLED`, and both publishing flags. Dev publishing
+remains disabled. App configuration does not preauthorize any person.
 Existing research sessions and per-Thread credentials are not imported into accounts.
 
 | Provider | Worker secrets |
@@ -319,6 +319,12 @@ onboarding request from establishing a session. Existing account reconnects reta
 The optional Sign in with Apple code path still requires its separate Services ID and
 sign-in key, but those credentials are not required to try Apple Music. A provider's
 identity cannot be replaced by reconnecting with a different provider account.
+
+Production rollout requires the Spotify redirect URI `https://listen.cx/account/spotify/callback`
+to be registered for the configured Spotify app, the provider secrets above, and all
+D1 migrations through `0013_publication_rate_limits.sql` before deploying the Worker.
+Migration `0013` preserves catalog rate-limit deadlines across Thread edits and retries.
+Run production operations manually; this repository forbids agent-executed production deployments.
 
 The encryption key is base64 encoding of 32 random bytes; preserve it across
 releases. Account credentials are encrypted in D1 with account-specific authenticated

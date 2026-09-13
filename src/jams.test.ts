@@ -47,6 +47,7 @@ describe("Jam link cleanup", () => {
     vi.restoreAllMocks();
     resolver.resolve.mockReset().mockResolvedValue(TRACK);
     await env.DB.prepare("DELETE FROM thread_contributions").run();
+    await env.DB.prepare("DELETE FROM thread_publications").run();
     await env.DB.prepare("DELETE FROM threads").run();
     await env.DB.prepare("DELETE FROM links").run();
   });
