@@ -43,12 +43,6 @@
   .sync-providers { grid-template-columns: 1fr; }
 }
 
-.counterpart { margin-top: .75rem; font-size: .85rem; }
-.counterpart summary { cursor: pointer; }
-.counterpart form { display: grid; gap: .65rem; margin-top: .65rem; }
-.counterpart input[type="url"] { width: 100%; min-width: 0; padding: .65rem; border: 1px solid #e5e5e5; border-radius: .35rem; background: white; color: inherit; }
-.counterpart-confirm { display: flex; align-items: flex-start; gap: .5rem; line-height: 1.5; }
-.counterpart-confirm input { margin-top: .3rem; flex: none; }
 
 .music-connections-list { display: grid; gap: 18px; margin: 24px 0; }
 .music-connection { padding: 24px; border: 1px solid #e3e3e3; border-radius: 12px; background: white; }

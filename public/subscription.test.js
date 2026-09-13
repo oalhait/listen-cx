@@ -14,7 +14,7 @@ it('shows synced only after matching revision and valid verified destination', (
 });
 
 it('explains identity and Apple copy failures without restricting the Thread', () => {
-  expect(subscriptionMessage({ ...data, subscription: { ...subscription, blockedReason: 'identities_incomplete' } })).toBe('A song needs a confirmed Spotify match before this playlist can sync.');
+  expect(subscriptionMessage({ ...data, subscription: { ...subscription, blockedReason: 'identities_incomplete' } })).toBe('Some songs could not be matched on Spotify. Your songs are saved in this Thread.');
   expect(subscriptionMessage({ ...data, subscription: { ...subscription, failureCode: 'provider_drift' } })).toContain('changed outside this Thread');
   expect(subscriptionMessage({ account: { provider: 'apple', connected: true }, subscription: { ...subscription, blockedReason: 'append_only' } })).toContain('copy is paused');
 });

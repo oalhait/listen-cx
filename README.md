@@ -127,8 +127,7 @@ authorize their account.
 
 Open `/threads/new` to create an ordered, collaborative collection. The website
 owns the songs and their order. Anyone with the public sharing link can read and
-add tracks; a separate private management link can confirm recording matches,
-reorder, remove, and close. Legacy per-Thread Apple connections permanently lock
+add tracks; a separate private management link can reorder, remove, and close. Legacy per-Thread Apple connections permanently lock
 removal and reordering; additions and closure remain available. New account
 subscriptions do not lock website edits and can be unsubscribed without deleting
 the provider playlist.
@@ -201,8 +200,9 @@ International Standard Recording Code (ISRC), when available. If that finds no
 compatible candidate, it searches by title and artist. It checks recording version, duration,
 content ratings, and destination playability. Equivalent releases sharing an ISRC
 are grouped; a clear result is selected automatically. Ambiguous results remain
-suggestions in the Thread. Managers can confirm a link to override an automatic
-selection; the API verifies the catalog URL, while the manager verifies the recording.
+unresolved. The frontend shows automatic match links without manual change or review
+controls. The management API still supports confirmed links for compatibility; it
+verifies the catalog URL, while the manager verifies the recording.
 Manual confirmations remain immutable. Unverified legacy sources stay unresolved.
 Missing identities block the entire provider snapshot, preserving duplicates and order.
 
@@ -312,8 +312,8 @@ URLs are excluded from invocation logs and traces in staging.
 Provider readback is required before reporting a personal playlist synced. Background
 publishing updates the playlist; browser polling refreshes the displayed sync status
 without a page reload. Cross-provider matching runs before publication. If no confident
-match is found, the copy pauses for a manager to review a suggested or manually supplied
-link. Refresh the song list to see matching results. Apple copies support additions; removing/reordering website songs or
+match is found, the copy pauses and reports that some songs could not be matched.
+Refresh the song list to see matching results or retry sync to search again. Apple copies support additions; removing/reordering website songs or
 editing the provider playlist can pause their sync. Unsubscribe stops future work;
 an already running provider request may still complete. Resubscribing reuses the
 existing destination rather than making a new playlist.

@@ -87,18 +87,14 @@ it("links only verified provider playlists and explains when the link has older 
   expect(threadPage({ ...view, publications: [{ ...spotify, connected: false }] }, false)).not.toContain("Listen on Spotify");
 });
 
-it("offers explicit counterpart confirmation to managers when a connected app is missing a match", () => {
+it("keeps manual counterpart controls out of manager and public pages", () => {
   const connected = { ...view, publications: view.publications.map(p => ({ ...p, connected: true })) };
-  const page = threadPage(connected, true);
-  expect(page).toContain('data-identify="1"');
-  expect(page).toContain("same recording");
-  expect(page).toContain("Add Apple Music link");
-  expect(page).toContain("automatically when someone subscribes on Apple Music");
-  expect(page).not.toContain("Confirm Apple Music version");
-  expect(page).toContain('type="checkbox"');
-  expect(page).not.toContain('data-remove="1"');
-  expect(threadPage(connected, false)).not.toContain('data-identify=');
-  expect(threadPage({ ...connected, contributions: connected.contributions.map(s => ({ ...s, counterpart: { provider: "apple" as const, id: "123", storefront: "us", confirmed: true as const } })) }, true)).not.toContain('data-identify=');
+  for (const managed of [true, false]) {
+    const page = threadPage(connected, managed);
+    expect(page).not.toContain('data-identify=');
+    expect(page).not.toContain('Add Apple Music link');
+    expect(page).not.toContain('type="checkbox"');
+  }
 });
 
 it("keeps sync retry available to a manager after closure", () => {
@@ -117,22 +113,23 @@ it("shows a personal subscription and account settings instead of shared provide
   expect(page).toContain('/settings?thread=');
   expect(page).not.toContain('/manage/apps');
   expect(page).not.toContain('Waiting to sync');
-  expect(page).toContain('data-identify="1"');
+  expect(page).not.toContain('data-identify=');
   expect(threadPage(view, false, [], true)).not.toContain('data-identify=');
 });
 
-it('shows automatic counterparts and keeps uncertain suggestions separate from confirmation', () => {
+it('keeps automatic match links without manual change or review controls', () => {
   const song = view.contributions[0]!;
   const matched = { provider: 'apple' as const, storefront: 'us', status: 'matched' as const, method: 'metadata' as const,
     selected: { id: '123', title: 'Song', artist: 'Artist' }, candidates: [] };
   const page = threadPage({ ...view, contributions: [{ ...song, matches: [matched] }] }, true, [], true);
   expect(page).toContain('Matched on Apple Music');
   expect(page).toContain('https://music.apple.com/us/song/123');
-  expect(page).toContain('Change Apple Music match');
+  expect(page).not.toContain('Change Apple Music match');
+  expect(page).not.toContain('data-identify=');
   const uncertain = threadPage({ ...view, contributions: [{ ...song, matches: [{ ...matched, status: 'ambiguous', selected: null,
     candidates: [{ id: '456', title: '<Live>', artist: 'Artist' }] }] }] }, true, [], true);
-  expect(uncertain).toContain('Review Apple Music match');
-  expect(uncertain).toContain('&lt;Live&gt;');
+  expect(uncertain).not.toContain('Review Apple Music match');
+  expect(uncertain).not.toContain('data-identify=');
   expect(uncertain).not.toContain('Matched on Apple Music');
-  expect(uncertain).toContain('https://music.apple.com/us/song/456');
+  expect(uncertain).not.toContain('https://music.apple.com/us/song/456');
 });

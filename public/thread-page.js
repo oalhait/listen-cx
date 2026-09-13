@@ -84,18 +84,6 @@ document.querySelectorAll('[data-retry-sync]').forEach(button => {
   });
 });
 
-document.querySelectorAll('[data-identify]').forEach(form => {
-  const confirmed = form.querySelector('[name="confirmed"]');
-  form.querySelector('[name="url"]').addEventListener('input', () => { confirmed.checked = false; });
-  form.addEventListener('submit', event => {
-    event.preventDefault();
-    void controller.submit(`/t/${thread.dataset.capability}/manage/identify`, {
-      id: Number(form.dataset.identify), url: form.querySelector('[name="url"]').value.trim(),
-      confirmed: confirmed.checked, expectedRevision: Number(thread.dataset.revision),
-    });
-  });
-});
-
 const connections = createConnectionController({
   connect: provider => manage({ kind: 'connect', provider }),
   showAppleConfirmation(show) {

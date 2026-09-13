@@ -26,7 +26,7 @@ export function subscriptionMessage(data) {
   if (!subscription?.connected) return `Subscribe to keep your own ${provider} playlist updated.`;
   const code = subscription.blockedReason || subscription.failureCode;
   if (code === 'matching_pending') return `Finding matching songs on ${provider}…`;
-  if (code === 'identities_incomplete') return `A song needs a confirmed ${provider} match before this playlist can sync.`;
+  if (code === 'identities_incomplete') return `Some songs could not be matched on ${provider}. Your songs are saved in this Thread.`;
   if (code === 'append_only' || code === 'apple_append_only') return 'Your Apple Music copy is paused because songs were removed or reordered. New songs can only be appended.';
   if (code === 'provider_drift') return `Your ${provider} playlist changed outside this Thread. Sync is paused to protect those changes.`;
   if (subscription.status === 'synced' && subscription.appliedRevision === subscription.requestedRevision && playlistLink(subscription)) return `Your ${provider} playlist is up to date.`;
