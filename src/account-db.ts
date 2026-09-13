@@ -89,6 +89,21 @@ export class D1AccountStore {
       .bind(stateHash, browserHash, Date.now()).first<{ payload: string }>();
   }
 
+  async cancelOAuth(browserHash: string): Promise<void> {
+    await this.db.withSession("first-primary").prepare("DELETE FROM account_oauth WHERE browser_hash = ?").bind(browserHash).run();
+  }
+
+  async completeOAuthSession(stateHash: string, browserHash: string, accountId: string, tokenHash: string, expiresAt: number): Promise<boolean> {
+    const db = this.db.withSession("first-primary");
+    const result = await db.batch([
+      db.prepare(`INSERT INTO account_sessions(account_id, token_hash, expires_at)
+        SELECT ?, ?, ? FROM account_oauth WHERE state_hash = ? AND browser_hash = ? AND expires_at > ? RETURNING token_hash`)
+        .bind(accountId, tokenHash, expiresAt, stateHash, browserHash, Date.now()),
+      db.prepare("DELETE FROM account_oauth WHERE state_hash = ? AND browser_hash = ?").bind(stateHash, browserHash),
+    ]);
+    return result[0]!.results.length === 1;
+  }
+
   async subscribe(accountId: string, capability: string): Promise<Subscription> {
     const db = this.db.withSession("first-primary");
     await db.prepare(`INSERT INTO thread_subscriptions(account_id, thread_id, provider, publisher_key, requested_revision)

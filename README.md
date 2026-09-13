@@ -239,14 +239,20 @@ Existing research sessions and per-Thread credentials are not imported into acco
 | Apple identity | `APPLE_SIGN_IN_CLIENT_ID`, `APPLE_SIGN_IN_KEY_ID`, `APPLE_SIGN_IN_TEAM_ID`, `APPLE_SIGN_IN_PRIVATE_KEY_P8` |
 | Apple Music library | `APPLE_MUSIC_KEY_ID`, `APPLE_MUSIC_TEAM_ID`, `APPLE_MUSIC_PRIVATE_KEY_P8`, `PUBLISHER_ENCRYPTION_KEY` |
 
-Apple website login requires a Sign in with Apple Services ID and a signing key
-authorized for it. A MusicKit Media ID/key is insufficient. Register the exact
-`https://staging.listen.cx/account/apple/callback` return URL. Apple sign-in is
-unavailable until these separate credentials exist; after identity verification,
-the user grants MusicKit library access from settings. Spotify's stable account
-identifier and Apple's verified ID-token subject identify their respective accounts.
-An account's provider cannot be changed. Spotify and Apple identities create separate
-accounts; the site does not merge them.
+Apple Music onboarding calls MusicKit directly using the existing MusicKit app
+credentials. It creates a browser-owned Apple account only after the backend validates
+library permission. A long-lived HttpOnly browser capability identifies this local
+account; a Music User Token is a library grant, never a stable Apple identity. Returning
+in the same browser reuses the account and its playlist journals, even after sign-out.
+Clearing site cookies loses access to that browser account; different browsers create
+separate accounts. Spotify uses its verified provider identity across devices.
+
+Apple browser grants are expiring and single-use, bound to the browser that prepared
+MusicKit. Sign-out invalidates outstanding grants, including completion of an in-flight
+authorization. Existing account reconnects retain the session-bound grant checks.
+The optional Sign in with Apple code path still requires its separate Services ID and
+sign-in key, but those credentials are not required to try Apple Music. An account's
+provider cannot be changed; sign out before trying the other provider.
 
 The encryption key is base64 encoding of 32 random bytes; preserve it across
 releases. Account credentials are encrypted in D1 with account-specific authenticated
@@ -324,8 +330,8 @@ Account settings and subscriber-owned playlists were deployed to staging on
 September 12, 2026 (version `574e154c-9bd0-4080-b30a-023456e082ab`), after a fresh
 database export and migration `0007`. The UI and Spotify sign-in redirect were
 checked in the live browser; the account/subscription change passed 435 offline tests.
-Personal subscription readback still needs a real signed-in user. Apple sign-in
-remains unavailable: the checked Doppler `listen-cx` configs (`dev_personal`, `stg`)
+Personal subscription readback still needs a real signed-in user. At that rollout Apple sign-in
+was unavailable: the checked Doppler `listen-cx` configs (`dev_personal`, `stg`)
 contain MusicKit credentials, but not the separate Sign in with Apple credentials.
 Migrations `0004`–`0006` were also applied after exporting staging. Production has
 not been redeployed. Historical D1 migration files remain unchanged; no remote

@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { accountReturn, createAccountActions, prepareAccountAppleMusic, waitForAccountMusicKit } from './account.js';
+import { accountReturn, createAccountActions, prepareAccountAppleMusic, prepareBrowserAppleMusic, waitForAccountMusicKit } from './account.js';
 
 function setup(overrides = {}) {
   const request = vi.fn().mockResolvedValue({});
@@ -17,7 +17,7 @@ it('accepts only Thread capabilities for the return link', () => {
 });
 
 it('starts each provider with the Thread return context and validates its destination', async () => {
-  for (const [provider, host] of [['spotify', 'accounts.spotify.com'], ['apple', 'appleid.apple.com']]) {
+  for (const [provider, host] of [['spotify', 'accounts.spotify.com']]) {
     const { actions, request, navigate } = setup();
     request.mockResolvedValue({ url: `https://${host}/authorize?state=opaque` });
     await actions.signIn(provider);
@@ -130,4 +130,23 @@ it('reports an unavailable MusicKit script after a bounded wait', async () => {
   await pending;
   expect(document.removeEventListener).toHaveBeenCalledWith('musickitloaded', expect.any(Function));
   vi.useRealTimers();
+});
+
+it('uses MusicKit directly for Apple onboarding without calling Sign in with Apple', async () => {
+  const { actions, request, music, navigate } = setup();
+  const pending = actions.signIn('apple');
+  expect(music.authorize).toHaveBeenCalledTimes(1);
+  await pending;
+  expect(request).toHaveBeenCalledExactlyOnceWith('/account/apple/authorize', { musicUserToken: 'private-token', authorizationBinding: 'session-binding' });
+  expect(navigate).not.toHaveBeenCalled();
+});
+
+it('prepares anonymous Apple Music with a browser binding before the user gesture', async () => {
+  const music = {};
+  const MusicKit = { configure: vi.fn().mockResolvedValue(undefined), getInstance: () => music };
+  const request = vi.fn().mockResolvedValue({ developerToken: 'app-jwt', authorizationBinding: 'browser-grant' });
+  expect(await prepareBrowserAppleMusic(request, MusicKit)).toEqual({ music, authorizationBinding: 'browser-grant' });
+  expect(request).toHaveBeenCalledExactlyOnceWith('/account/apple/prepare', {});
+  expect(MusicKit.configure).toHaveBeenCalledWith(expect.objectContaining({ developerToken: 'app-jwt' }));
+  await expect(prepareBrowserAppleMusic(async () => ({ developerToken: 'app-jwt' }), MusicKit)).rejects.toThrow('Browser preparation expired');
 });
