@@ -45,10 +45,10 @@ export class D1PublicationStore {
       p.provider, p.next_attempt_at AS nextAttemptAt, p.account_id AS accountId,
       p.status, p.applied_revision AS appliedRevision, p.requested_revision AS requestedRevision
       FROM (
-        SELECT publisher_key, thread_id, provider, next_attempt_at, NULL AS account_id,
+        SELECT publisher_key, thread_id, provider, MAX(next_attempt_at, rate_limit_until) AS next_attempt_at, NULL AS account_id,
           status, applied_revision, requested_revision, connected FROM thread_publications
         UNION ALL
-        SELECT publisher_key, thread_id, provider, next_attempt_at, account_id,
+        SELECT publisher_key, thread_id, provider, MAX(next_attempt_at, rate_limit_until) AS next_attempt_at, account_id,
           status, applied_revision, requested_revision, connected FROM thread_subscriptions
       ) p JOIN threads t ON t.id = p.thread_id`;
   }
@@ -82,9 +82,16 @@ export class D1PublicationStore {
   async failed(publisherKey: string, revision: number, code: string, blocked: boolean, nextAttemptAt: number): Promise<void> {
     const target = await this.target(publisherKey);
     if (!target) return;
-    await this.db.withSession("first-primary").prepare(`UPDATE ${target.accountId ? "thread_subscriptions" : "thread_publications"} SET status = ?,
+    const db = this.db.withSession("first-primary");
+    const table = target.accountId ? "thread_subscriptions" : "thread_publications";
+    const statements = [];
+    if (code === "rate_limited") statements.push(db.prepare(`UPDATE ${table}
+      SET rate_limit_until = MAX(rate_limit_until, ?) WHERE publisher_key = ?`)
+      .bind(nextAttemptAt, publisherKey));
+    statements.push(db.prepare(`UPDATE ${table} SET status = ?,
       blocked_reason = ?, failure_code = ?, next_attempt_at = ?
       WHERE publisher_key = ? AND requested_revision = ? AND connected = 1 AND status != 'synced'`)
-      .bind(blocked ? "blocked" : "failed", blocked ? code : null, blocked ? null : code, nextAttemptAt, publisherKey, revision).run();
+      .bind(blocked ? "blocked" : "failed", blocked ? code : null, blocked ? null : code, nextAttemptAt, publisherKey, revision));
+    await db.batch(statements);
   }
 }

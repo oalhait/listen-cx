@@ -136,3 +136,33 @@ it('backs off catalog rate limits without marking the song unavailable', async (
   expect(await runPublication(env.DB, target.publisherKey, { spotify: vi.fn() }, async () => { throw { status: 429, retryAfterSeconds: 120 }; })).toBeGreaterThanOrEqual(Date.now() + 119000);
   expect((await threads.get(cap))!.publications.find(p => p.provider === 'spotify')).toMatchObject({ status: 'failed', failureCode: 'rate_limited' });
 });
+
+it.each([
+  { subscriber: false, editDuringRequest: false },
+  { subscriber: false, editDuringRequest: true },
+  { subscriber: true, editDuringRequest: false },
+  { subscriber: true, editDuringRequest: true },
+])('preserves catalog cooldown across revisions: %j', async ({ subscriber, editDuringRequest }) => {
+  const { threads, auth, publications, target, cap } = await setup();
+  await threads.add(cap, { expectedRevision: 1, requestKey: 'song', source: { provider: 'apple', id: '123', storefront: 'us' }, track: { title: 'Song', artist: 'Artist', artworkUrl: null, isrc: null, complete: false, spotifyUrl: null, appleUrl: 'https://music.apple.com/us/song/123' } });
+  const publisherKey = subscriber ? await subscribe(cap) : target.publisherKey;
+  const now = Date.now();
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+  const close = () => threads.manage(auth, { kind: 'close', expectedRevision: 2, requestKey: 'edit' });
+  const resolve = vi.fn(async () => {
+    if (editDuringRequest) await close();
+    throw { status: 429, retryAfterSeconds: 120 };
+  });
+  const publish = vi.fn();
+  try {
+    expect(await runPublication(env.DB, publisherKey, { spotify: publish }, resolve)).toBe(now + 120000);
+    if (!editDuringRequest) await close();
+    expect(await publications.target(publisherKey)).toMatchObject({ requestedRevision: 3, nextAttemptAt: now + 120000 });
+    expect((await publications.due(cap)).some(item => item.publisherKey === publisherKey)).toBe(false);
+    expect(await runPublication(env.DB, publisherKey, { spotify: publish }, resolve)).toBe(now + 120000);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(publish).not.toHaveBeenCalled();
+    clock.mockReturnValue(now + 120000);
+    expect((await publications.due(cap)).some(item => item.publisherKey === publisherKey)).toBe(true);
+  } finally { clock.mockRestore(); }
+});

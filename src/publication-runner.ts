@@ -58,6 +58,7 @@ export async function runPublication(db: D1Database, publisherKey: string, publi
     const result = failure(error);
     const retryAt = result.blocked ? 0 : Date.now() + result.delay;
     await publications.failed(publisherKey, desired.revision, result.code, result.blocked, retryAt);
+    if (result.code === "rate_limited") return retryAt;
     const current = await threads.get(target.capability);
     if (current && current.revision > desired.revision) return Date.now() + 1;
     return result.blocked ? null : retryAt;
