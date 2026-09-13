@@ -161,13 +161,17 @@ export class MusicCatalog {
     if (track.provider !== "apple" || !track.albumId) return track;
     const data = await this.request("apple", new URL(`https://api.music.apple.com/v1/catalog/${storefront}/albums/${track.albumId}`));
     if (data === null) return track;
-    const albums = list(object(data).data, 1);
-    if (!albums.length) return track;
-    const album = object(albums[0]);
-    if (album.type !== "albums" || album.id !== track.albumId) throw new MusicCatalogError("Invalid Apple catalog album identity", 502);
-    const attributes = object(album.attributes);
-    if (string(attributes.name) !== track.album) return track;
-    return { ...track, releaseDate: releaseDate(attributes.releaseDate) };
+    try {
+      const albums = list(object(data).data, 1);
+      if (!albums.length) return track;
+      const album = object(albums[0]);
+      if (album.type !== "albums" || album.id !== track.albumId) return track;
+      const attributes = object(album.attributes);
+      if (string(attributes.name) !== track.album) return track;
+      return { ...track, releaseDate: releaseDate(attributes.releaseDate) };
+    } catch {
+      return track;
+    }
   }
 
   private async search(source: CatalogTrack, provider: Provider, storefront: string, isrc: string | null): Promise<CatalogTrack[]> {

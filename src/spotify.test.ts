@@ -142,3 +142,20 @@ it.each([
 
   expect(await new SpotifyClient(fetcher).getTrack(TRACK_ID)).toMatchObject({ title: 'Song', album: null });
 });
+
+it("bounds optional page failures without losing primary metadata", async () => {
+  let pageCalls = 0;
+  const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+    const url = String(input);
+    if (url.includes('/oembed')) return Response.json({ title: 'Song' });
+    if (url.includes('/embed/')) return new Response('<script id="__NEXT_DATA__" type="application/json">' + JSON.stringify({ props: { pageProps: { state: { data: { entity: {
+      type: 'track', id: TRACK_ID, title: 'Song', duration: 180000, artists: [{ name: 'Artist' }], isExplicit: false, isPlayable: true,
+    } } } } } }) + '</script>');
+    pageCalls += 1;
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    throw new TypeError('offline');
+  });
+
+  expect(await new SpotifyClient(fetcher).getTrack(TRACK_ID)).toMatchObject({ title: 'Song', album: null });
+  expect(pageCalls).toBe(3);
+});

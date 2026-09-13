@@ -73,17 +73,14 @@ async function boundedText(response: Response, limit = 512_000): Promise<string 
 
 export class SpotifyClient {
   private fetcher: Fetcher;
-  private publicPageFetcher: Fetcher;
 
   constructor(fetcher: Fetcher = fetch) {
-    this.publicPageFetcher = fetcher;
     this.fetcher = (input, init) => fetchWithRetry(fetcher, input, init);
   }
 
   async getTrack(id: string): Promise<SpotifyTrack | null> {
     const trackUrl = spotifyTrackUrl(id);
-    const publicPageFetcher = this.publicPageFetcher;
-    const optionalPage = publicPageFetcher(trackUrl).catch((error: unknown) => {
+    const optionalPage = this.fetcher(trackUrl).catch((error: unknown) => {
       const status = typeof error === "object" && error !== null ? (error as { status?: unknown }).status : null;
       if (status === 429 || (typeof status === "number" && status >= 500)) throw error;
       return null;

@@ -7,6 +7,8 @@ declare global {
   namespace Cloudflare {
     interface Env {
       TEST_PRODUCTION_VARS: Record<string, string | boolean>;
+      TEST_PRODUCTION_CONFIG: { main: string; migrations: { tag: string; new_sqlite_classes?: string[] }[];
+        durable_objects: { bindings: { name: string; class_name: string }[] } };
     }
   }
 }
@@ -24,4 +26,15 @@ it("serves account settings and both music connections with production configura
   expect(account.status).toBe(200);
   expect(await account.json()).toMatchObject({ account: null, available: { spotify: true, apple: true } });
   await waitOnExecutionContext(ctx);
+});
+
+it("deploys through the compatibility-preserving production entrypoint", () => {
+  expect(env.TEST_PRODUCTION_CONFIG.main).toBe("src/worker-production.ts");
+  expect(env.TEST_PRODUCTION_CONFIG.migrations).toEqual(expect.arrayContaining([
+    expect.objectContaining({ tag: "v1", new_sqlite_classes: ["ThreadLive"] }),
+    expect.objectContaining({ tag: "thread-publisher-v1", new_sqlite_classes: ["ThreadPublisher"] }),
+  ]));
+  expect(env.TEST_PRODUCTION_CONFIG.durable_objects.bindings).toEqual([
+    expect.objectContaining({ name: "THREAD_PUBLISHER", class_name: "ThreadPublisher" }),
+  ]);
 });

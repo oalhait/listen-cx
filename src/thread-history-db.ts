@@ -16,16 +16,19 @@ export class D1ThreadHistoryStore {
   async list(owner: HistoryOwner): Promise<ThreadHistoryEntry[]> {
     const { results } = await this.db.withSession("first-primary").prepare(`WITH current_owner AS (
       SELECT ? AS browser_digest, (SELECT group_id FROM accounts WHERE id = ?) AS group_id
+    ), visible AS (
+      SELECT h.thread_id, 1 AS is_owner FROM thread_history h CROSS JOIN current_owner o
+      WHERE h.account_id IN (SELECT id FROM accounts WHERE group_id = o.group_id) OR h.browser_digest = o.browser_digest
+      UNION ALL
+      SELECT s.thread_id, 0 AS is_owner FROM thread_subscriptions s JOIN accounts a ON a.id = s.account_id
+      CROSS JOIN current_owner o WHERE s.connected = 1 AND a.group_id = o.group_id
+    ), relationships AS (
+      SELECT thread_id, MAX(is_owner) AS is_owner FROM visible GROUP BY thread_id
     ) SELECT t.public_capability AS capability, t.title,
       t.created_at AS createdAt, t.closed_at AS closedAt,
       (SELECT COUNT(*) FROM thread_contributions c WHERE c.thread_id = t.id AND c.removed_at IS NULL) AS songCount,
-      CASE WHEN EXISTS (SELECT 1 FROM thread_history h CROSS JOIN current_owner o WHERE h.thread_id = t.id
-        AND (h.account_id IN (SELECT id FROM accounts WHERE group_id = o.group_id) OR h.browser_digest = o.browser_digest))
-        THEN 'owner' ELSE 'subscriber' END AS relationship
-      FROM threads t CROSS JOIN current_owner o WHERE EXISTS (SELECT 1 FROM thread_history h WHERE h.thread_id = t.id
-        AND (h.account_id IN (SELECT id FROM accounts WHERE group_id = o.group_id) OR h.browser_digest = o.browser_digest))
-      OR EXISTS (SELECT 1 FROM thread_subscriptions s JOIN accounts a ON a.id = s.account_id
-        WHERE s.thread_id = t.id AND s.connected = 1 AND a.group_id = o.group_id)
+      CASE WHEN r.is_owner = 1 THEN 'owner' ELSE 'subscriber' END AS relationship
+      FROM relationships r JOIN threads t ON t.id = r.thread_id
       ORDER BY t.created_at DESC, t.id DESC`)
       .bind(owner.browserDigest, owner.accountId).all<ThreadHistoryEntry>();
     return results;

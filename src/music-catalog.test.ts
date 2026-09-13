@@ -41,6 +41,47 @@ describe("MusicCatalog", () => {
     expect(await new MusicCatalog({ appleDeveloperToken: "token", fetcher }).findMatch(spotifySource, "apple", "us")).toMatchObject({ status: "matched", selected: { id: "1614548303" } });
   });
 
+  it("does not enrich an ambiguous Apple set above the five-candidate bound", async () => {
+    const candidates = Array.from({ length: 6 }, (_, index) => ({ ...apple({
+      url: `https://music.apple.com/us/album/album/${1000 + index}?i=${2000 + index}`,
+      isrc: `USABC240000${index}`,
+    }), id: String(2000 + index) }));
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ results: { songs: { data: candidates } } }));
+    const spotifySource: CatalogTrack = { ...source, provider: "spotify", id: spotifyId, releaseDate: "2026-01-01", isrc: null };
+
+    expect(await new MusicCatalog({ appleDeveloperToken: "token", fetcher }).findMatch(spotifySource, "apple", "us"))
+      .toMatchObject({ status: "ambiguous" });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves retryable Apple album enrichment failures", async () => {
+    const candidates = ["123", "456"].map((id, index) => ({ ...apple({
+      url: `https://music.apple.com/us/album/album/${1000 + index}?i=${id}`,
+      isrc: `USABC240000${index}`,
+    }), id }));
+    const fetcher = vi.fn<typeof fetch>(async input => new URL(String(input)).pathname.includes("/albums/")
+      ? new Response(null, { status: 429, headers: { "Retry-After": "17" } })
+      : Response.json({ results: { songs: { data: candidates } } }));
+    const spotifySource: CatalogTrack = { ...source, provider: "spotify", id: spotifyId, releaseDate: "2026-01-01", isrc: null };
+
+    await expect(new MusicCatalog({ appleDeveloperToken: "token", fetcher }).findMatch(spotifySource, "apple", "us"))
+      .rejects.toMatchObject({ status: 429, retryAfterSeconds: 17 });
+  });
+
+  it("keeps an ambiguous result when optional Apple album metadata is malformed", async () => {
+    const candidates = ["123", "456"].map((id, index) => ({ ...apple({
+      url: `https://music.apple.com/us/album/album/${1000 + index}?i=${id}`,
+      isrc: `USABC240000${index}`,
+    }), id }));
+    const fetcher = vi.fn<typeof fetch>(async input => new URL(String(input)).pathname.includes("/albums/")
+      ? Response.json({ data: [{ id: "wrong", type: "albums", attributes: {} }] })
+      : Response.json({ results: { songs: { data: candidates } } }));
+    const spotifySource: CatalogTrack = { ...source, provider: "spotify", id: spotifyId, releaseDate: "2026-01-01", isrc: null };
+
+    expect(await new MusicCatalog({ appleDeveloperToken: "token", fetcher }).findMatch(spotifySource, "apple", "us"))
+      .toMatchObject({ status: "ambiguous" });
+  });
+
   it("does not turn public source throttling into missing metadata", async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async () => new Response(null, { status: 429, headers: { "Retry-After": "23" } }));
     await expect(new MusicCatalog({ fetcher }).get({ provider: "spotify", id: spotifyId, storefront: "us" })).rejects.toMatchObject({ status: 429, retryAfterSeconds: 23 });
