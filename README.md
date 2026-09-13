@@ -197,7 +197,8 @@ is capped at 10,000 Threads. These limits do not replace deployment abuse contro
 snapshot: website revision/order, every contribution, provider-specific identity
 resolution, and publication status. A source track establishes only its own service's
 identity. Before publishing, a private matching step looks for the counterpart by
-ISRC, then searches by title and artist. It checks recording version, duration,
+International Standard Recording Code (ISRC), when available. If that finds no
+compatible candidate, it searches by title and artist. It checks recording version, duration,
 content ratings, and destination playability. Equivalent releases sharing an ISRC
 are grouped; a clear result is selected automatically. Ambiguous results remain
 suggestions in the Thread. Managers can confirm a link to override an automatic
@@ -207,8 +208,9 @@ Missing identities block the entire provider snapshot, preserving duplicates and
 
 Automatic evidence lives in `automatic_track_matches` (migration `0010`), separately
 from manual confirmations and source links. Each subscriber destination retains its
-own accepted catalog IDs across retries; matching does not change website revisions.
-Five source lookups run per alarm, with subsequent alarms continuing the batch.
+own accepted catalog IDs across retries and website revisions; manual confirmations
+take precedence. Matching does not change website revisions. Each alarm attempts
+matching for at most five uncached contributions, with later alarms continuing the batch.
 Uncertain results are reused within a revision; an explicit sync retry searches them
 again. Accepted IDs are retained so Apple append journals and retry receipts stay stable.
 
@@ -366,19 +368,31 @@ Account settings and subscriber-owned playlists were deployed to staging on
 September 12, 2026 (version `574e154c-9bd0-4080-b30a-023456e082ab`), after a fresh
 database export and migration `0007`. The UI and Spotify sign-in redirect were
 checked in the live browser; the account/subscription change passed 435 offline tests.
-Personal subscription readback still needs a real signed-in user. At that rollout Apple sign-in
+That rollout did not include personal subscription readback. Apple sign-in
 was unavailable: the checked Doppler `listen-cx` configs (`dev_personal`, `stg`)
 contain MusicKit credentials, but not the separate Sign in with Apple credentials.
 Direct MusicKit onboarding was subsequently deployed to staging (version
 `75206045-4c1e-466a-8341-4c9c794f74fd`). Its 50 focused tests and typecheck passed,
 and the live settings page enabled Apple Music after SDK preparation. The embedded
-browser did not expose an authorization window; user consent and personal subscription
-readback still need verification in a regular browser.
+browser did not expose an authorization window, so that check did not verify user
+consent or personal subscription readback.
 Dual-provider connections were deployed after a fresh staging export and migration
 `0009` (version `c82892f0-976d-4098-b0fe-16add9b6182c`). Ninety focused tests and
 typecheck passed, including both connection directions, independent subscriptions,
 session revocation, and history preservation. Live settings and Thread pages show both
 providers; simultaneous personal playlist readback still requires user authorization.
+Automatic matching was deployed with migration `0010` (version
+`3ef5acfc-62e7-4dce-bb42-2b106eab92a2`). The change passed 179 focused tests and
+typecheck. The first migration request failed with Cloudflare authorization code
+7403, but the Worker upload proceeded; the migration then succeeded on retry. Future
+migration/deployment sequences must stop on any failed command to avoid that window.
+Live verification found both Apple-origin songs in `omartest3` by ISRC and confirmed
+its Spotify subscription at revision 2 through provider readback. The public Spotify
+playlist independently showed AMAZING followed by Lay It on Me; the existing Apple
+subscription remained synced at revision 2. A separate six-song read-only check of
+Spotify public metadata against Apple catalog search selected five counterparts and
+left one ambiguous. This is smoke evidence, not a measured accuracy benchmark.
+
 Migrations `0004`–`0006` were also applied after exporting staging. Production has
 not been redeployed. Historical D1 migration files remain unchanged; no remote
 rows have been deleted. Existing source metadata retains its original values,
