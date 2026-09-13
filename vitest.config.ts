@@ -7,6 +7,7 @@ export default defineConfig({
     cloudflareTest(async () => ({
       wrangler: { configPath: "./wrangler.jsonc", environment: "staging" },
       miniflare: {
+        durableObjects: { LEGACY_THREAD: { className: "ThreadLive", useSQLite: true } },
         bindings: {
           TEST_MIGRATIONS: await readD1Migrations(path.join(import.meta.dirname, "migrations")),
         },

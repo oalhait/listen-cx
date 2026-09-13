@@ -266,17 +266,24 @@ One initial Spotify request timed out; the next live run passed.
 
 ## Existing deployments and data
 
-This restart has not been deployed. Historical D1 migrations remain unchanged;
-no remote data has been deleted. Existing rows retain their original values,
+The restart and Threads integration were deployed to `staging.listen.cx` on
+September 12, 2026, with both provider publishing flags disabled. Migrations
+`0004`–`0006` were applied after exporting the staging database. Production has
+not been redeployed. Historical D1 migration files remain unchanged; no remote
+rows have been deleted. Existing source metadata retains its original values,
 including any old inferred cross-provider URLs. Those values have not been
 reverified, and the API does not certify them as matches. When both URLs are
 present, the recipient page cannot identify the original source and offers only
 provider searches, regardless of the historical `complete` flag. It ignores
 invalid provider URLs. Existing JSON rows and D1 migrations remain unchanged.
 
-The Worker exports a new `ThreadPublisher` Durable Object for background publishing;
-it does not export the old Thread Durable Object. Deploying over an
-existing installation requires a deliberate Durable Object migration decision
-first; this change does not schedule deletion of its stored data. Production
+The Worker exports a new `ThreadPublisher` Durable Object for background publishing.
+Staging uses `src/worker-staging.ts` to retain the existing `ThreadLive` namespace
+and its original `v1` migration before creating `ThreadPublisher`. That compatibility
+class returns 410 and consumes old alarms without sending notifications or touching
+stored values; the application has no binding to it. Its regression test verifies
+storage preservation. The old live Thread implementation is not restored.
+Other existing installations still require a deliberate Durable Object migration
+decision before redeployment; no namespace deletion is scheduled. Production
 commands must be run by Omar. Browser requests now receive recipient HTML; JSON
 consumers retain the stored-row contract described above.

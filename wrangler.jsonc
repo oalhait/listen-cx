@@ -78,6 +78,11 @@
     },
     "staging": {
       "name": "listen-cx-staging",
+      "main": "src/worker-staging.ts",
+      "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ThreadLive"] },
+        { "tag": "thread-publisher-v1", "new_sqlite_classes": ["ThreadPublisher"] }
+      ],
       "routes": [
         {
           "pattern": "staging.listen.cx",
