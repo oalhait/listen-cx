@@ -27,7 +27,7 @@ export async function runPublication(db: D1Database, publisherKey: string, publi
   const view = await threads.get(target.capability);
   if (!view) return null;
   const desired = desiredState(view, target.provider);
-  if (desired.publication?.status === "synced") return null;
+  if (target.status === "synced" && target.appliedRevision === desired.revision) return null;
   const publish = publishers[target.provider];
   if (!publish || !desired.identitiesComplete) {
     await publications.failed(publisherKey, desired.revision, publish ? "identities_incomplete" : "publisher_not_authorized", true, 0);

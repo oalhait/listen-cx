@@ -2,6 +2,8 @@ import { DurableObject } from "cloudflare:workers";
 import { D1PublicationStore } from "./publication-db.js";
 import { runPublication, type ProviderPublishers } from "./publication-runner.js";
 import { availablePublishers, availableConnections, type PublishingSecrets } from "./publishing-bindings.js";
+import { D1AccountStore } from "./account-db.js";
+import { seal, unseal, refreshSpotifyTokens, signAppleDeveloperToken, applePreflight, MusicAuthError } from "./music-auth.js";
 import { MusicConnectionStore } from "./music-connection-store.js";
 import type { Provider } from "./urls.js";
 import { SpotifyPublisher, PublishingError, type Destination as SpotifyDestination } from "./publishing/spotify/publisher.js";
@@ -9,6 +11,9 @@ import { refreshSpotifyAccessToken, type SpotifyTokens } from "./publishing/spot
 import { ApplePublisher, type Destination as AppleDestination } from "./publishing/apple/publisher.js";
 
 export type RuntimeEnv = Omit<Env, keyof PublishingSecrets> & PublishingSecrets;
+type SpotifyAccountCredentials = { clientId: string; accountId: string; tokens: SpotifyTokens };
+type ApplePublishingCredentials = { developerToken: string; musicUserToken: string };
+type AppleAccountCredentials = { teamId: string; musicUserToken: string; storefront: string };
 type StoredCredentials = SpotifyTokens & { seedFingerprint: string };
 type EncryptedCredentials = { iv: string; ciphertext: string };
 const credentialKey = "_credentials";
@@ -25,6 +30,7 @@ export class ThreadPublisher extends DurableObject<RuntimeEnv> {
   #tokenRefresh: Promise<string> | undefined;
   #connectionStore: MusicConnectionStore | undefined;
   #operationBusy = false;
+  #accountOperation: Promise<void> = Promise.resolve();
 
   #connections(publisherKey: string): MusicConnectionStore {
     if (!/^[A-Za-z0-9_-]{1,80}$/.test(publisherKey) || publisherKey === credentialKey
@@ -59,6 +65,22 @@ export class ThreadPublisher extends DurableObject<RuntimeEnv> {
     } finally { this.#operationBusy = false; }
   }
 
+  async validateAccountAppleToken(publisherKey: string, musicUserToken: string): Promise<void> {
+    this.#connections(publisherKey);
+    if (this.#operationBusy) throw new Error("connection_busy");
+    this.#operationBusy = true;
+    try {
+      const target = await new D1PublicationStore(this.env.DB).target(publisherKey, true);
+      if (!target?.accountId || target.provider !== "apple") throw new MusicAuthError("authorization_required", 401);
+      const destination = await this.ctx.storage.get<AppleDestination>(`apple:${publisherKey}`);
+      if (destination?.intent?.kind === "create" && !destination.providerPlaylistId) throw new Error("create_unresolved");
+      if (destination?.providerPlaylistId) {
+        const developerToken = await this.#appleDeveloperToken();
+        await applePreflight(developerToken, musicUserToken, destination.providerPlaylistId);
+      }
+    } finally { this.#operationBusy = false; }
+  }
+
   async wake(publisherKey: string): Promise<void> {
     if (!/^[A-Za-z0-9_-]{1,80}$/.test(publisherKey) || publisherKey === credentialKey) throw new Error("invalid_publisher_key");
     if (!this.ctx.id.equals(this.env.THREAD_PUBLISHER.idFromName(publisherKey))) throw new Error("publisher_key_mismatch");
@@ -73,20 +95,116 @@ export class ThreadPublisher extends DurableObject<RuntimeEnv> {
   async alarm(): Promise<void> {
     const publisherKey = await this.ctx.storage.get<string>("publisherKey");
     if (!publisherKey) return;
+    const target = await new D1PublicationStore(this.env.DB).target(publisherKey);
+    if (!target) return;
     if (this.#operationBusy) {
       await this.ctx.storage.setAlarm(Date.now() + 5000);
       return;
     }
-    this.#operationBusy = true;
     let retryAt: number | null;
-    try { retryAt = await runPublication(this.env.DB, publisherKey, this.#publishers(publisherKey)); }
-    finally { this.#operationBusy = false; }
+    if (target.accountId && target.provider === "apple") {
+      retryAt = await this.env.THREAD_PUBLISHER.getByName(`account_${target.accountId}`).publishAppleSubscription(target.accountId, publisherKey);
+    } else {
+      this.#operationBusy = true;
+      try { retryAt = await runPublication(this.env.DB, publisherKey, this.#publishers(publisherKey, target.accountId, target.provider)); }
+      finally { this.#operationBusy = false; }
+    }
     if (retryAt !== null) {
       await this.ctx.storage.transaction(async storage => {
         const alarm = await storage.getAlarm();
         if (alarm === null || alarm > retryAt) await storage.setAlarm(retryAt);
       });
     }
+  }
+
+  #accountStore(accountId: string): D1AccountStore {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(accountId)
+      || !this.ctx.id.equals(this.env.THREAD_PUBLISHER.idFromName(`account_${accountId}`))) throw new Error("account_object_required");
+    return new D1AccountStore(this.env.DB);
+  }
+
+  async #serializeAccount<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.#accountOperation.then(operation);
+    this.#accountOperation = result.then(() => {}, () => {});
+    return result;
+  }
+
+  async setAccountCredentials(accountId: string, encryptedCredentials: string): Promise<void> {
+    const accounts = this.#accountStore(accountId);
+    await this.#serializeAccount(() => accounts.setCredentials(accountId, encryptedCredentials));
+  }
+
+  async getAccountSpotifyToken(accountId: string): Promise<string> {
+    const accounts = this.#accountStore(accountId);
+    return this.#serializeAccount(async () => {
+      const account = await accounts.account(accountId);
+      if (account?.provider !== "spotify" || !account.credentials || this.env.SPOTIFY_PUBLISHING_ENABLED !== "true") throw new MusicAuthError("authorization_required", 401);
+      const credentials = await unseal<SpotifyAccountCredentials>(this.env.PUBLISHER_ENCRYPTION_KEY!, `account:${accountId}`, JSON.parse(account.credentials));
+      if (credentials.clientId !== this.env.SPOTIFY_CLIENT_ID || credentials.accountId !== account.subject) throw new MusicAuthError("authorization_required", 401);
+      if (credentials.tokens.expiresAt > Date.now() + 60_000) return credentials.tokens.accessToken;
+      const tokens = await refreshSpotifyTokens({ clientId: credentials.clientId, refreshToken: credentials.tokens.refreshToken });
+      await accounts.setCredentials(accountId, JSON.stringify(await seal(this.env.PUBLISHER_ENCRYPTION_KEY!, `account:${accountId}`, { ...credentials, tokens })));
+      return tokens.accessToken;
+    });
+  }
+
+  async getAccountAppleCredentials(accountId: string): Promise<ApplePublishingCredentials> {
+    this.#accountStore(accountId);
+    return this.#serializeAccount(() => this.#readAccountAppleCredentials(accountId));
+  }
+
+  async #readAccountAppleCredentials(accountId: string): Promise<ApplePublishingCredentials> {
+    const account = await this.#accountStore(accountId).account(accountId);
+    if (account?.provider !== "apple" || !account.credentials || this.env.APPLE_PUBLISHING_ENABLED !== "true") throw new MusicAuthError("authorization_required", 401);
+    const credentials = await unseal<AppleAccountCredentials>(this.env.PUBLISHER_ENCRYPTION_KEY!, `account:${accountId}`, JSON.parse(account.credentials));
+    if (credentials.teamId !== this.env.APPLE_MUSIC_TEAM_ID) throw new MusicAuthError("authorization_required", 401);
+    return { developerToken: await this.#appleDeveloperToken(), musicUserToken: credentials.musicUserToken };
+  }
+
+  async #appleDeveloperToken(): Promise<string> {
+    return signAppleDeveloperToken({ keyId: this.env.APPLE_MUSIC_KEY_ID!, teamId: this.env.APPLE_MUSIC_TEAM_ID!, privateKey: this.env.APPLE_MUSIC_PRIVATE_KEY_P8! });
+  }
+
+  async publishAppleSubscription(accountId: string, publisherKey: string): Promise<number | null> {
+    this.#accountStore(accountId);
+    return this.#serializeAccount(async () => {
+      const target = await new D1PublicationStore(this.env.DB).target(publisherKey);
+      if (!target) return null;
+      if (target.accountId !== accountId || target.provider !== "apple") throw new MusicAuthError("authorization_required", 401);
+      let credentials: ApplePublishingCredentials;
+      try { credentials = await this.#readAccountAppleCredentials(accountId); }
+      catch (error) { return runPublication(this.env.DB, publisherKey, { apple: async () => { throw error; } }); }
+      return this.env.THREAD_PUBLISHER.getByName(publisherKey).runAppleSubscription(publisherKey, accountId, credentials);
+    });
+  }
+
+  async runAppleSubscription(publisherKey: string, accountId: string, credentials: ApplePublishingCredentials): Promise<number | null> {
+    this.#connections(publisherKey);
+    if (this.#operationBusy) return Date.now() + 5000;
+    this.#operationBusy = true;
+    try {
+      const target = await new D1PublicationStore(this.env.DB).target(publisherKey);
+      if (!target) return null;
+      if (target.accountId !== accountId || target.provider !== "apple") throw new MusicAuthError("authorization_required", 401);
+      return await runPublication(this.env.DB, publisherKey, this.#publishers(publisherKey, accountId, "apple", credentials));
+    } finally { this.#operationBusy = false; }
+  }
+
+  async authorizeAccountApple(accountId: string, musicUserToken: string): Promise<void> {
+    const accounts = this.#accountStore(accountId);
+    return this.#serializeAccount(async () => {
+      const account = await accounts.account(accountId);
+      if (account?.provider !== "apple" || this.env.APPLE_PUBLISHING_ENABLED !== "true") throw new MusicAuthError("authorization_required", 401);
+      const developerToken = await this.#appleDeveloperToken();
+      const { storefront } = await applePreflight(developerToken, musicUserToken);
+      const subscriptions = await accounts.subscriptions(accountId);
+      for (const subscription of subscriptions) {
+        await this.env.THREAD_PUBLISHER.getByName(subscription.publisherKey).validateAccountAppleToken(subscription.publisherKey, musicUserToken);
+      }
+      await accounts.setCredentials(accountId, JSON.stringify(await seal(this.env.PUBLISHER_ENCRYPTION_KEY!, `account:${accountId}`, {
+        teamId: this.env.APPLE_MUSIC_TEAM_ID!, musicUserToken, storefront,
+      } satisfies AppleAccountCredentials)));
+    });
   }
 
   async spotifyAccessToken(): Promise<string> {
@@ -122,13 +240,16 @@ export class ThreadPublisher extends DurableObject<RuntimeEnv> {
     return tokens.accessToken;
   }
 
-  #publishers(publisherKey: string): ProviderPublishers {
+  #publishers(publisherKey: string, accountId: string | null = null, accountProvider?: Provider, appleCredentials?: ApplePublishingCredentials): ProviderPublishers {
     const publishers: ProviderPublishers = {};
     const personal = availableConnections(this.env);
-    const available = this.env.MUSIC_ACCOUNT_CONNECTIONS_ENABLED === "true" ? personal : availablePublishers(this.env);
+    const available = accountId ? (accountProvider ? [accountProvider] : [])
+      : this.env.MUSIC_ACCOUNT_CONNECTIONS_ENABLED === "true" ? personal : availablePublishers(this.env);
     if (available.includes("spotify")) {
       const publisher = new SpotifyPublisher({
-        accessToken: () => personal.includes("spotify")
+        accessToken: () => accountId
+          ? this.env.THREAD_PUBLISHER.getByName(`account_${accountId}`).getAccountSpotifyToken(accountId)
+          : personal.includes("spotify")
           ? this.#connections(publisherKey).spotifyAccessToken()
           : this.env.THREAD_PUBLISHER.getByName(credentialKey).spotifyAccessToken(),
         store: { get: key => this.ctx.storage.get<SpotifyDestination>(`spotify:${key}`),
@@ -148,7 +269,9 @@ export class ThreadPublisher extends DurableObject<RuntimeEnv> {
     }
     if (available.includes("apple")) {
       const publisher = new ApplePublisher({
-        credentials: () => personal.includes("apple")
+        credentials: () => accountId
+          ? appleCredentials ? Promise.resolve(appleCredentials) : Promise.reject(new MusicAuthError("authorization_required", 401))
+          : personal.includes("apple")
           ? this.#connections(publisherKey).appleCredentials()
           : Promise.resolve({ developerToken: this.env.APPLE_DEVELOPER_TOKEN!, musicUserToken: this.env.APPLE_MUSIC_USER_TOKEN! }),
         store: { get: key => this.ctx.storage.get<AppleDestination>(`apple:${key}`),

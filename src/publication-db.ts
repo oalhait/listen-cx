@@ -1,12 +1,16 @@
 import type { Provider } from "./urls.js";
 import { isManagementAuthorization, type ManagementAuthorization } from "./thread-security.js";
-import { ThreadError } from "./thread.js";
+import { ThreadError, type PublicationStatus } from "./thread.js";
 
 export interface PublicationTarget {
   publisherKey: string;
   capability: string;
   provider: Provider;
   nextAttemptAt: number;
+  accountId: string | null;
+  status: PublicationStatus["status"];
+  appliedRevision: number | null;
+  requestedRevision: number;
 }
 
 export function isPlaylistUrl(provider: Provider, id: string, value: string): boolean {
@@ -31,27 +35,36 @@ export class D1PublicationStore {
       .bind(provider, authorization.publicCapability).run();
   }
 
+  private targets() {
+    return `SELECT p.publisher_key AS publisherKey, t.public_capability AS capability,
+      p.provider, p.next_attempt_at AS nextAttemptAt, p.account_id AS accountId,
+      p.status, p.applied_revision AS appliedRevision, p.requested_revision AS requestedRevision
+      FROM (
+        SELECT publisher_key, thread_id, provider, next_attempt_at, NULL AS account_id,
+          status, applied_revision, requested_revision, connected FROM thread_publications
+        UNION ALL
+        SELECT publisher_key, thread_id, provider, next_attempt_at, account_id,
+          status, applied_revision, requested_revision, connected FROM thread_subscriptions
+      ) p JOIN threads t ON t.id = p.thread_id`;
+  }
+
   async due(capability?: string): Promise<PublicationTarget[]> {
-    const result = await this.db.withSession("first-primary").prepare(`SELECT p.publisher_key AS publisherKey,
-      t.public_capability AS capability, p.provider, p.next_attempt_at AS nextAttemptAt
-      FROM thread_publications p JOIN threads t ON t.id = p.thread_id
+    const result = await this.db.withSession("first-primary").prepare(`${this.targets()}
       WHERE p.connected = 1 AND p.status IN ('pending', 'failed') AND p.next_attempt_at <= ?
-      AND (? IS NULL OR t.public_capability = ?) ORDER BY p.next_attempt_at, p.thread_id LIMIT 20`)
+      AND (? IS NULL OR t.public_capability = ?) ORDER BY p.next_attempt_at, p.thread_id, p.publisher_key LIMIT 20`)
       .bind(Date.now(), capability ?? null, capability ?? null).all<PublicationTarget>();
     return result.results;
   }
 
-  async target(publisherKey: string): Promise<PublicationTarget | null> {
-    return this.db.withSession("first-primary").prepare(`SELECT p.publisher_key AS publisherKey,
-      t.public_capability AS capability, p.provider, p.next_attempt_at AS nextAttemptAt
-      FROM thread_publications p JOIN threads t ON t.id = p.thread_id
-      WHERE p.publisher_key = ? AND p.connected = 1`).bind(publisherKey).first<PublicationTarget>();
+  async target(publisherKey: string, includeDisconnected = false): Promise<PublicationTarget | null> {
+    return this.db.withSession("first-primary").prepare(`${this.targets()}
+      WHERE p.publisher_key = ? AND (p.connected = 1 OR ? = 1)`).bind(publisherKey, includeDisconnected ? 1 : 0).first<PublicationTarget>();
   }
 
   async verified(publisherKey: string, revision: number, playlistId: string, playlistUrl: string): Promise<void> {
     const target = await this.target(publisherKey);
     if (!target || !isPlaylistUrl(target.provider, playlistId, playlistUrl)) throw new Error("invalid_publication_readback");
-    await this.db.withSession("first-primary").prepare(`UPDATE thread_publications SET applied_revision = ?,
+    await this.db.withSession("first-primary").prepare(`UPDATE ${target.accountId ? "thread_subscriptions" : "thread_publications"} SET applied_revision = ?,
       verified_playlist_id = ?, verified_playlist_url = ?,
       status = CASE WHEN requested_revision = ? THEN 'synced' ELSE 'pending' END,
       blocked_reason = NULL, failure_code = NULL, next_attempt_at = 0
@@ -62,7 +75,9 @@ export class D1PublicationStore {
   }
 
   async failed(publisherKey: string, revision: number, code: string, blocked: boolean, nextAttemptAt: number): Promise<void> {
-    await this.db.withSession("first-primary").prepare(`UPDATE thread_publications SET status = ?,
+    const target = await this.target(publisherKey);
+    if (!target) return;
+    await this.db.withSession("first-primary").prepare(`UPDATE ${target.accountId ? "thread_subscriptions" : "thread_publications"} SET status = ?,
       blocked_reason = ?, failure_code = ?, next_attempt_at = ?
       WHERE publisher_key = ? AND requested_revision = ? AND connected = 1 AND status != 'synced'`)
       .bind(blocked ? "blocked" : "failed", blocked ? code : null, blocked ? null : code, nextAttemptAt, publisherKey, revision).run();

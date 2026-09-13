@@ -338,8 +338,8 @@ export default {
     try {
       validateRequest(request, env);
       const url = new URL(request.url);
-      if (request.method === "GET" && url.pathname === "/auth/callback" && url.searchParams.get("state")?.startsWith("threads.")) {
-        url.pathname = "/connections/spotify/callback";
+      if (request.method === "GET" && url.pathname === "/auth/callback" && (url.searchParams.get("state")?.startsWith("threads.") || url.searchParams.get("state")?.startsWith("account."))) {
+        url.pathname = url.searchParams.get("state")?.startsWith("account.") ? "/account/spotify/callback" : "/connections/spotify/callback";
         return new Response(null, { status: 302, headers: { Location: url.href, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
       }
       if (url.pathname === "/health" && request.method === "GET") return json({ service: "spotify-publisher-spike", stage: "staging" });

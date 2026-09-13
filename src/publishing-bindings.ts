@@ -1,6 +1,11 @@
 import type { Provider } from "./urls.js";
 
 export interface PublishingSecrets {
+  ACCOUNT_SUBSCRIPTIONS_ENABLED?: string;
+  APPLE_SIGN_IN_CLIENT_ID?: string;
+  APPLE_SIGN_IN_KEY_ID?: string;
+  APPLE_SIGN_IN_TEAM_ID?: string;
+  APPLE_SIGN_IN_PRIVATE_KEY_P8?: string;
   SPOTIFY_PUBLISHING_ENABLED?: string;
   APPLE_PUBLISHING_ENABLED?: string;
   SPOTIFY_CLIENT_ID?: string;

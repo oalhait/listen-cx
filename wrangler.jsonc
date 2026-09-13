@@ -93,6 +93,7 @@
         "BASE_URL": "https://staging.listen.cx",
         "JAMS_ENABLED": false,
         "MUSIC_ACCOUNT_CONNECTIONS_ENABLED": "true",
+        "ACCOUNT_SUBSCRIPTIONS_ENABLED": "true",
         "SPOTIFY_PUBLISHING_ENABLED": "true",
         "APPLE_PUBLISHING_ENABLED": "true",
         "SPOTIFY_REDIRECT_URI": "https://staging.listen.cx/auth/callback"

@@ -87,6 +87,8 @@ describe("isolated Spotify staging security and HTTP", () => {
     const callback = `${browserOrigin}/auth/callback?state=threads.sealed-state&code=private-code`;
     const response = await http(callback, { redirect: "manual" });
     expect(response.status).toBe(302);
+    const accountCallback = await http(`${browserOrigin}/auth/callback?state=account.nonce&code=private-code`, { redirect: "manual" });
+    expect(accountCallback.headers.get("location")).toBe(`${browserOrigin}/account/spotify/callback?state=account.nonce&code=private-code`);
     expect(response.headers.get("location")).toBe(`${browserOrigin}/connections/spotify/callback?state=threads.sealed-state&code=private-code`);
     expect(response.headers.get("cache-control")).toContain("no-store");
     expect(response.headers.get("referrer-policy")).toBe("no-referrer");

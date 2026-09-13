@@ -102,3 +102,14 @@ it("keeps sync retry available to a manager after closure", () => {
   expect(threadPage(closed, true, ["apple"])).toContain('data-retry-sync="apple"');
   expect(threadPage(closed, false, ["apple"])).not.toContain('data-retry-sync=');
 });
+
+it("shows a personal subscription and account settings instead of shared provider connections", () => {
+  const page = threadPage(view, true, ["apple", "spotify"], true);
+  expect(page).toContain('id="personal-subscription"');
+  expect(page).toContain('src="/subscription.js"');
+  expect(page).toContain('/settings?thread=');
+  expect(page).not.toContain('/manage/apps');
+  expect(page).not.toContain('Waiting to sync');
+  expect(page).toContain('data-identify="1"');
+  expect(threadPage(view, false, [], true)).not.toContain('data-identify=');
+});

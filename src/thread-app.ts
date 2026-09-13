@@ -24,6 +24,7 @@ function requestFields(body: Record<string, unknown>): MutationRequest {
 }
 
 export interface ThreadPublishing {
+  accountSubscriptions?: boolean;
   availableProviders: Provider[];
   onChange: (capability: string) => void;
   retry?: (authorization: ManagementAuthorization, provider: Provider) => Promise<void>;
@@ -69,7 +70,7 @@ export function createThreadApp({ resolver, store, baseUrl, publishing }: { reso
     const capability = c.req.param("capability");
     const thread = await store.get(capability);
     if (!thread) return c.html(threadPage(null, false), 404);
-    return c.html(threadPage(thread, Boolean(await authorization(c, capability)), publishing?.availableProviders));
+    return c.html(threadPage(thread, Boolean(await authorization(c, capability)), publishing?.availableProviders, publishing?.accountSubscriptions));
   });
   app.post("/api/threads/:capability/contributions", async c => {
     const capability = c.req.param("capability");
@@ -147,6 +148,7 @@ export function createThreadApp({ resolver, store, baseUrl, publishing }: { reso
     const request = requestFields(body);
     let intent: ManagementIntent;
     if (body.kind === "connect" && (body.provider === "spotify" || body.provider === "apple") && body.id === undefined && body.ids === undefined) {
+      if (publishing?.accountSubscriptions) throw new ThreadError(410, "account_settings_required", "Connect your account in settings and subscribe to this Thread.");
       intent = { kind: "connect", provider: body.provider };
       const replay = await store.preflight(capability, request.requestKey, await mutationFingerprint(intent), request.expectedRevision);
       if (replay) {

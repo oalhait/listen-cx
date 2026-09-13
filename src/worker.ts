@@ -1,3 +1,5 @@
+import { Hono } from "hono";
+import { createAccountApp } from "./account-app.js";
 import { D1PublicationStore } from "./publication-db.js";
 import { D1ThreadStore } from "./thread-db.js";
 import { D1LinkStore } from "./db.js";
@@ -67,8 +69,11 @@ export default {
       threadStore: new D1ThreadStore(env.DB),
       appleMusic: createAppleMusicIssuer(env),
       baseUrl,
-      connections: createMusicConnectionsApp(env, baseUrl, onChange),
+      connections: env.ACCOUNT_SUBSCRIPTIONS_ENABLED === "true"
+        ? new Hono().route("/", createAccountApp(env, baseUrl, onChange)).get("/t/:capability/manage/apps", c => c.redirect(`/settings?thread=${encodeURIComponent(c.req.param("capability"))}`))
+        : createMusicConnectionsApp(env, baseUrl, onChange),
       publishing: {
+        accountSubscriptions: env.ACCOUNT_SUBSCRIPTIONS_ENABLED === "true",
         availableProviders: availableConnections(env),
         onChange,
         requireConnection: (authorization, provider) => requireMusicConnection(env, authorization, provider),

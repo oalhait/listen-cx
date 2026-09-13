@@ -60,3 +60,48 @@ it("honors rate limits and sanitizes unexpected provider errors", async () => {
   expect(JSON.stringify(current)).not.toContain("secret-token");
   expect(current.publications.find(p => p.provider === "spotify")!.failureCode).toBe("rate_limited");
 });
+
+async function subscribe(capability: string) {
+  const accountId = crypto.randomUUID();
+  const publisherKey = crypto.randomUUID();
+  await env.DB.prepare("INSERT INTO accounts(id, provider, provider_subject, label) VALUES (?, 'spotify', ?, 'Listener')")
+    .bind(accountId, accountId).run();
+  await env.DB.prepare(`INSERT INTO thread_subscriptions(account_id, thread_id, provider, publisher_key, requested_revision)
+    SELECT ?, id, 'spotify', ?, revision FROM threads WHERE public_capability = ?`)
+    .bind(accountId, publisherKey, capability).run();
+  return publisherKey;
+}
+
+it("publishes each subscriber independently when the legacy destination is already synced", async () => {
+  const { publications, target, cap } = await setup();
+  await publications.verified(target.publisherKey, 1, id, output.playlistUrl);
+  const first = await subscribe(cap);
+  const second = await subscribe(cap);
+  const publish = vi.fn(async input => ({ ...output, revision: input.revision }));
+  await runPublication(env.DB, first, { spotify: publish });
+  expect(await publications.target(first)).toMatchObject({ status: "synced", appliedRevision: 1 });
+  expect(await publications.target(second)).toMatchObject({ status: "pending", appliedRevision: null });
+  await runPublication(env.DB, first, { spotify: publish });
+  expect(publish).toHaveBeenCalledTimes(1);
+  await runPublication(env.DB, second, { spotify: publish });
+  expect(publish.mock.calls.map(([input]) => input.playlistKey)).toEqual([first, second]);
+  expect(await publications.target(target.publisherKey)).toMatchObject({ status: "synced", appliedRevision: 1 });
+});
+
+it("isolates subscriber provider failures and preserves newer website revisions", async () => {
+  const { threads, auth, publications, cap } = await setup();
+  const first = await subscribe(cap);
+  const second = await subscribe(cap);
+  await runPublication(env.DB, first, { spotify: async () => { throw { status: 401 }; } });
+  expect(await publications.target(first)).toMatchObject({ status: "blocked", appliedRevision: null });
+  expect(await publications.target(second)).toMatchObject({ status: "pending", appliedRevision: null });
+  await runPublication(env.DB, second, { spotify: async () => {
+    await threads.manage(auth, { kind: "close", expectedRevision: 1, requestKey: "close" });
+    return output;
+  } });
+  expect(await publications.target(second)).toMatchObject({ status: "pending", appliedRevision: 1, requestedRevision: 2 });
+  await publications.verified(second, 2, id, output.playlistUrl);
+  await publications.failed(second, 1, "stale", false, Date.now() + 60000);
+  expect(await publications.target(second)).toMatchObject({ status: "synced", appliedRevision: 2 });
+  expect(await publications.target(first)).toMatchObject({ status: "pending", appliedRevision: null, requestedRevision: 2 });
+});

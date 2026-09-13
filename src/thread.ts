@@ -7,7 +7,7 @@ export const THREAD_MUTATION_LIMIT = 2000;
 export const THREAD_CREATION_LIMIT = 10000;
 
 export class ThreadError extends Error {
-  constructor(public readonly status: 400 | 403 | 404 | 409 | 410 | 413 | 422 | 502 | 503, public readonly code: string, message: string) {
+  constructor(public readonly status: 400 | 401 | 403 | 404 | 409 | 410 | 413 | 422 | 502 | 503, public readonly code: string, message: string) {
     super(message);
   }
 }
