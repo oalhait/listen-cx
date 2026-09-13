@@ -49,3 +49,23 @@
 .counterpart input[type="url"] { width: 100%; min-width: 0; padding: .65rem; border: 1px solid #e5e5e5; border-radius: .35rem; background: white; color: inherit; }
 .counterpart-confirm { display: flex; align-items: flex-start; gap: .5rem; line-height: 1.5; }
 .counterpart-confirm input { margin-top: .3rem; flex: none; }
+
+.music-connections-list { display: grid; gap: 18px; margin: 24px 0; }
+.music-connection { padding: 24px; border: 1px solid #e3e3e3; border-radius: 12px; background: white; }
+.music-connection-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.music-connection h2 { margin: 0; font-size: 20px; font-weight: 500; }
+.music-connection > p { max-width: 56ch; font-size: 14px; line-height: 1.6; color: #666; }
+.music-connection .thread-note { font-size: 12px; }
+.connection-status { font-size: 12px; color: #666; background: #f3f3f3; border-radius: 20px; padding: 6px 10px; }
+.connection-account { overflow-wrap: anywhere; }
+.connection-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; margin-top: 20px; }
+.connection-actions .generate-button { min-height: 44px; white-space: normal; text-align: left; }
+.connection-actions .text-button { min-height: 44px; }
+.connection-actions button:disabled { opacity: .5; cursor: wait; }
+.connection-confirmation { margin-top: 20px; padding-top: 20px; border-top: 1px solid #e3e3e3; }
+.connection-confirmation h3 { font-size: 16px; font-weight: 500; margin: 0 0 10px; }
+.connection-confirmation p { font-size: 14px; color: #555; line-height: 1.6; }
+@media (max-width: 600px) {
+  .music-connection { padding: 18px; }
+  .thread-sync .section-caption { flex-wrap: wrap; gap: 10px; }
+}

@@ -1,7 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
 import { D1PublicationStore } from "./publication-db.js";
 import { runPublication, type ProviderPublishers } from "./publication-runner.js";
-import { availablePublishers, type PublishingSecrets } from "./publishing-bindings.js";
+import { availablePublishers, availableConnections, type PublishingSecrets } from "./publishing-bindings.js";
+import { MusicConnectionStore } from "./music-connection-store.js";
+import type { Provider } from "./urls.js";
 import { SpotifyPublisher, PublishingError, type Destination as SpotifyDestination } from "./publishing/spotify/publisher.js";
 import { refreshSpotifyAccessToken, type SpotifyTokens } from "./publishing/spotify/credentials.js";
 import { ApplePublisher, type Destination as AppleDestination } from "./publishing/apple/publisher.js";
@@ -21,6 +23,41 @@ export async function wakeDue(env: RuntimeEnv, capability?: string): Promise<voi
 
 export class ThreadPublisher extends DurableObject<RuntimeEnv> {
   #tokenRefresh: Promise<string> | undefined;
+  #connectionStore: MusicConnectionStore | undefined;
+  #operationBusy = false;
+
+  #connections(publisherKey: string): MusicConnectionStore {
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(publisherKey) || publisherKey === credentialKey
+      || !this.ctx.id.equals(this.env.THREAD_PUBLISHER.idFromName(publisherKey))) throw new Error("publisher_key_mismatch");
+    return this.#connectionStore ??= new MusicConnectionStore(this.ctx.storage, this.env, publisherKey);
+  }
+
+  async connectionStatus(publisherKey: string, provider: Provider) {
+    return this.#connections(publisherKey).status(provider);
+  }
+
+  async beginSpotifyConnection(publisherKey: string, capability: string, browserHash: string, redirectUri: string) {
+    return this.#connections(publisherKey).beginSpotify(capability, browserHash, redirectUri);
+  }
+
+  async finishSpotifyConnection(publisherKey: string, nonce: string, browserHash: string, code: string): Promise<void> {
+    const connections = this.#connections(publisherKey);
+    if (this.#operationBusy) throw new Error("connection_busy");
+    this.#operationBusy = true;
+    try { await connections.finishSpotify(nonce, browserHash, code); }
+    finally { this.#operationBusy = false; }
+  }
+
+  async authorizeAppleConnection(publisherKey: string, musicUserToken: string): Promise<void> {
+    const connections = this.#connections(publisherKey);
+    if (this.#operationBusy) throw new Error("connection_busy");
+    this.#operationBusy = true;
+    try {
+      const destination = await this.ctx.storage.get<AppleDestination>(`apple:${publisherKey}`);
+      if (destination?.intent?.kind === "create" && !destination.providerPlaylistId) throw new Error("create_unresolved");
+      await connections.authorizeApple(musicUserToken, destination?.providerPlaylistId ?? undefined);
+    } finally { this.#operationBusy = false; }
+  }
 
   async wake(publisherKey: string): Promise<void> {
     if (!/^[A-Za-z0-9_-]{1,80}$/.test(publisherKey) || publisherKey === credentialKey) throw new Error("invalid_publisher_key");
@@ -36,7 +73,14 @@ export class ThreadPublisher extends DurableObject<RuntimeEnv> {
   async alarm(): Promise<void> {
     const publisherKey = await this.ctx.storage.get<string>("publisherKey");
     if (!publisherKey) return;
-    const retryAt = await runPublication(this.env.DB, publisherKey, this.#publishers());
+    if (this.#operationBusy) {
+      await this.ctx.storage.setAlarm(Date.now() + 5000);
+      return;
+    }
+    this.#operationBusy = true;
+    let retryAt: number | null;
+    try { retryAt = await runPublication(this.env.DB, publisherKey, this.#publishers(publisherKey)); }
+    finally { this.#operationBusy = false; }
     if (retryAt !== null) {
       await this.ctx.storage.transaction(async storage => {
         const alarm = await storage.getAlarm();
@@ -78,12 +122,15 @@ export class ThreadPublisher extends DurableObject<RuntimeEnv> {
     return tokens.accessToken;
   }
 
-  #publishers(): ProviderPublishers {
+  #publishers(publisherKey: string): ProviderPublishers {
     const publishers: ProviderPublishers = {};
-    const available = availablePublishers(this.env);
+    const personal = availableConnections(this.env);
+    const available = this.env.MUSIC_ACCOUNT_CONNECTIONS_ENABLED === "true" ? personal : availablePublishers(this.env);
     if (available.includes("spotify")) {
       const publisher = new SpotifyPublisher({
-        accessToken: () => this.env.THREAD_PUBLISHER.getByName(credentialKey).spotifyAccessToken(),
+        accessToken: () => personal.includes("spotify")
+          ? this.#connections(publisherKey).spotifyAccessToken()
+          : this.env.THREAD_PUBLISHER.getByName(credentialKey).spotifyAccessToken(),
         store: { get: key => this.ctx.storage.get<SpotifyDestination>(`spotify:${key}`),
           set: (key, value) => this.ctx.storage.put(`spotify:${key}`, value) },
       });
@@ -101,7 +148,9 @@ export class ThreadPublisher extends DurableObject<RuntimeEnv> {
     }
     if (available.includes("apple")) {
       const publisher = new ApplePublisher({
-        credentials: async () => ({ developerToken: this.env.APPLE_DEVELOPER_TOKEN!, musicUserToken: this.env.APPLE_MUSIC_USER_TOKEN! }),
+        credentials: () => personal.includes("apple")
+          ? this.#connections(publisherKey).appleCredentials()
+          : Promise.resolve({ developerToken: this.env.APPLE_DEVELOPER_TOKEN!, musicUserToken: this.env.APPLE_MUSIC_USER_TOKEN! }),
         store: { get: key => this.ctx.storage.get<AppleDestination>(`apple:${key}`),
           set: (key, value) => this.ctx.storage.put(`apple:${key}`, value) },
       });

@@ -7,9 +7,11 @@ short URLs are not supported. Apple album URLs must include a track's `?i=` ID.
 
 The recipient page opens the original provider URL and offers a clearly labeled
 search on the other app. No app preference is saved. Threads collect ordered songs
-collaboratively, with a publishing integration for shared Spotify and Apple Music
-accounts. Publishing is disabled pending product-runtime verification; Apple
-Music’s unattended server token transport is still unverified.
+collaboratively. A Thread's manager can authorize Spotify or Apple Music from
+**Connect music apps**, then explicitly start syncing to that account's playlist.
+Each Thread stores its own encrypted authorization. Actual provider readback is
+required before a playlist is reported as synced; fixture tests alone do not
+establish live provider behavior.
 
 ## Run locally
 
@@ -150,7 +152,11 @@ All Thread mutations require JSON, a matching `Origin`, and
 | `GET /t/:capability` | Thread page; management controls require its scoped HttpOnly cookie. |
 | `POST /api/threads/:capability/contributions` | `{url, requestKey, expectedRevision}`; resolves source metadata before committing. |
 | `POST /t/:capability/manage/activate` | Exchanges `{managementCapability}` for a Thread-scoped HttpOnly, SameSite=Strict cookie. HTTPS cookies are Secure. The browser removes the fragment before exchange. |
-| `POST /t/:capability/manage/mutate` | Manager only: `{kind, requestKey, expectedRevision}`, with `id` for `remove`, all active `ids` for `reorder`, `provider` for `connect`, or `kind: "close"`. Connection requires an enabled provider. |
+| `POST /t/:capability/manage/mutate` | Manager only: `{kind, requestKey, expectedRevision}`, with `id` for `remove`, all active `ids` for `reorder`, `provider` for `connect`, or `kind: "close"`. Connection requires an enabled provider and this Thread's authorized account. |
+| `GET /t/:capability/manage/apps` | Manager-only account connection screen; authorization alone does not start a new playlist. |
+| `POST /t/:capability/manage/apps/spotify/start` | Starts browser-bound Spotify PKCE authorization. The callback stores verified credentials; the manager separately starts sync. |
+| `POST /t/:capability/manage/apps/apple/token` | Returns a short-lived app developer JWT to the authorized management page. No private signing key is returned. |
+| `POST /t/:capability/manage/apps/apple/authorize` | Accepts the normal MusicKit authorization result, verifies personalized access from the backend, then encrypts the token for this Thread. |
 | `POST /t/:capability/manage/retry` | Manager only: `{provider}` retries an enabled, connected publication without changing Thread revision or bypassing retry deadlines. Also works after closure. |
 | `POST /t/:capability/manage/identify` | Manager only: `{id, url, confirmed: true, requestKey, expectedRevision}` confirms an immutable counterpart from the other music app after source URL verification. |
 
@@ -190,7 +196,8 @@ A private `ThreadPublisher` Durable Object serializes each destination through i
 alarm. D1 publication rows act as an outbox; request completion wakes pending work,
 and a scheduled sweep recovers work missed between commit and wakeup. Provider
 markers use private random destination keys, never Thread capabilities. No public
-route accepts credentials, destination IDs, or publication reports.
+route accepts destination IDs or publication reports. Account-token handoff is
+restricted to the manager-authorized Apple connection endpoint.
 
 Spotify creates one public playlist and replaces its contents to apply additions,
 removal, and order. Apple creates one public playlist and only appends an exact
@@ -201,30 +208,45 @@ Unexpected Apple playlist edits require attention rather than replacement or rem
 
 ### Publisher configuration
 
-Both `SPOTIFY_PUBLISHING_ENABLED` and `APPLE_PUBLISHING_ENABLED` default to `false`.
-A provider's connection control appears only when its flag is `true` and all its
-credentials are present. These are shared publisher accounts; listeners do not
-supply account tokens. Existing research authorization sessions are not automatically
-imported into the product runtime.
+Staging enables `MUSIC_ACCOUNT_CONNECTIONS_ENABLED` and both provider flags.
+The base and dev configurations leave publishing disabled. Authorization controls
+require the corresponding flag and app credentials; no user account token is
+preconfigured. Existing research authorization sessions are not imported.
 
 | Provider | Worker secrets |
 | --- | --- |
-| Spotify | `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REFRESH_TOKEN`, `PUBLISHER_ENCRYPTION_KEY` |
-| Apple Music | `APPLE_DEVELOPER_TOKEN`, `APPLE_MUSIC_USER_TOKEN` |
+| Spotify | `SPOTIFY_CLIENT_ID`, `PUBLISHER_ENCRYPTION_KEY` |
+| Apple Music | `APPLE_MUSIC_KEY_ID`, `APPLE_MUSIC_TEAM_ID`, `APPLE_MUSIC_PRIVATE_KEY_P8`, `PUBLISHER_ENCRYPTION_KEY` |
 
-The Spotify encryption key is base64 encoding of 32 random bytes. Refreshed tokens
-are encrypted in a dedicated private credential object, and rotated refresh tokens
-are persisted before use. Preserve that encryption key while its stored credentials
-are in use. Replacing the configured OAuth seed makes the runtime refresh that seed.
-Use Worker secrets in deployed environments and ignored `.dev.vars` locally; never
-put tokens in URLs, committed configuration, or Thread responses.
+The encryption key is base64 encoding of 32 random bytes. Credentials are encrypted
+with destination-specific authenticated data inside each private publisher object;
+Spotify refresh-token rotations are persisted before use. Preserve this encryption
+key across deployments. Personal-account mode never falls back to the old shared
+publisher secrets. Switching an established Spotify account is rejected; Apple
+reconnection must retain access to the existing editable destination. An ambiguous
+Apple creation stays fenced. Revoked Apple authorization requires reconnecting.
 
-Provider activation requires a live create-and-update test using the product runtime
-and exact readback of the same playlist. Spotify's isolated publisher has passed
-create/add/remove/reorder tests. Apple's ordinary browser create/append path has been
-verified, but its unattended server token transport remains unverified. Keep Apple
-publishing disabled until that server test succeeds. Remove/reorder are deliberately
-excluded from the Apple product contract. Research spikes remain isolated.
+Staging reuses the registered `https://staging.listen.cx/auth/callback` URI. The
+existing authorization Worker forwards only `threads.`-prefixed OAuth states to
+`/connections/spotify/callback`; old research callbacks retain their own handler.
+The product validates encrypted state, expiry, a browser-bound cookie, and a
+single-use nonce before exchanging the code. A same-site landing document restores
+the Strict management-cookie context before returning to the connection screen.
+Other environments must register their exact configured `SPOTIFY_REDIRECT_URI`
+or the default `/connections/spotify/callback` URL.
+
+Only the management authorization HTML permits MusicKit's script and connections
+and sends `Referrer-Policy: strict-origin`, which Apple's popup callback needs.
+APIs retain `no-referrer` and `no-store`. Staging disables request tracing to avoid
+recording OAuth callback queries. User tokens never enter HTML, URLs, or app browser
+storage. Use Worker secrets in deployed environments and ignored `.dev.vars` locally.
+
+Live acceptance requires creation and a later update through the product runtime,
+with exact readback of the same playlist. Apple's connection endpoint first checks
+backend token acceptance without a playlist write; only **Start syncing** creates
+a destination. Apple's permanent addition-only restriction remains enforced in D1.
+The prior isolated Spotify and foreground Apple proofs are not substitutes for
+product-runtime verification or saved-listener propagation tests.
 
 ## Retained code
 

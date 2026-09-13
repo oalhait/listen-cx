@@ -35,17 +35,13 @@ it("offers a bounded creation form with private management-link guidance", () =>
   expect(threadCreationPage()).not.toContain("Sync to Apple Music and Spotify is not available yet");
 });
 
-it("offers available connections only to managers of open Threads", () => {
-  expect(threadPage(view, true, ["apple"])).toContain('data-connect="apple"');
-  expect(threadPage(view, true)).not.toContain('data-connect=');
-  expect(threadPage(view, false, ["apple"])).not.toContain('data-connect=');
-  expect(threadPage({ ...view, closedAt: "now" }, true, ["apple"])).not.toContain('data-connect=');
-  const connected = { ...view, publications: view.publications.map(p => ({ ...p, connected: true })) };
-  expect(threadPage(connected, true, ["apple"])).not.toContain('data-connect=');
-  const page = threadPage(view, true, ["apple"]);
-  expect(page).toContain('id="apple-connect-confirmation" hidden');
-  expect(page).toContain("permanently disables removing and reordering songs");
-  expect(page).toContain("cannot disconnect Apple Music");
+it("links managers to account connections even when providers are unavailable", () => {
+  const path = `/t/${view.publicCapability}/manage/apps`;
+  expect(threadPage(view, true)).toContain(`href="${path}"`);
+  expect(threadPage(view, true)).toContain("Connect music apps");
+  expect(threadPage(view, true, ["apple"])).not.toContain('data-connect=');
+  expect(threadPage(view, false, ["apple"])).not.toContain(path);
+  expect(threadPage({ ...view, closedAt: "now" }, true)).toContain(`href="${path}"`);
 });
 
 it("hides removal and ordering after Apple connects while preserving additions and close", () => {

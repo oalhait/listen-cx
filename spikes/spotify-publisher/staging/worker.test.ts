@@ -83,6 +83,18 @@ function providerPlaylists() {
 }
 
 describe("isolated Spotify staging security and HTTP", () => {
+  it("forwards only the marked Thread callback to the same-origin product endpoint without touching spike credentials", async () => {
+    const callback = `${browserOrigin}/auth/callback?state=threads.sealed-state&code=private-code`;
+    const response = await http(callback, { redirect: "manual" });
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(`${browserOrigin}/connections/spotify/callback?state=threads.sealed-state&code=private-code`);
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect((await http(`${browserOrigin}/auth/callback/suffix?state=threads.test`, { redirect: "manual" })).status).toBe(404);
+    expect((await http(`${origin}/auth/callback?state=threads.test`, { redirect: "manual" })).status).toBe(400);
+    expect((await http(`${browserOrigin}/auth/callback?state=unmarked`, { redirect: "manual" })).status).toBe(400);
+    await runInDurableObject(state(), async (_, ctx) => { expect((await ctx.storage.list()).size).toBe(0); });
+  });
   it("requires operator authorization for controls and keeps status private", async () => {
     for (const path of ["/control/invitations", "/control/confirm", "/control/desired", "/control/status", "/control/readback?playlistKey=remote-spike", "/control/token-transport", "/control/publisher-transport"]) {
       expect((await request(path, undefined, path.endsWith("status") || path.includes("readback") ? "GET" : "POST", {})).status).toBe(401);

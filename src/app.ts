@@ -11,7 +11,7 @@ import { handleMcpRequest } from "./mcp.js";
 import type { AppleMusicDeveloperToken } from "./apple-music-auth.js";
 import { getJam, JamActionError } from "./jams.js";
 
-export function createApp({ resolver, store, jamStore, jamsEnabled = false, baseUrl, appleMusic, threadStore, publishing }: {
+export function createApp({ resolver, store, jamStore, jamsEnabled = false, baseUrl, appleMusic, threadStore, publishing, connections }: {
   resolver: Pick<Resolver, "resolve">;
   store: LinkStore;
   jamStore?: JamStore;
@@ -23,6 +23,7 @@ export function createApp({ resolver, store, jamStore, jamsEnabled = false, base
   };
   threadStore?: D1ThreadStore;
   publishing?: ThreadPublishing;
+  connections?: Hono;
 }) {
   const app = new Hono();
 
@@ -107,6 +108,7 @@ export function createApp({ resolver, store, jamStore, jamsEnabled = false, base
     }
   });
 
+  if (connections) app.route("/", connections);
   if (threadStore) app.route("/", createThreadApp({ resolver, store: threadStore, baseUrl, publishing }));
 
   app.get("/:slug", async (c) => {

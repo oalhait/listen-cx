@@ -13,7 +13,8 @@ import {
 } from "./apple-music-auth.js";
 
 type ListenEnv = Env & AppleMusicAuthEnv;
-import { availablePublishers, type PublishingSecrets } from "./publishing-bindings.js";
+import { availableConnections, type PublishingSecrets } from "./publishing-bindings.js";
+import { createMusicConnectionsApp, requireMusicConnection } from "./music-connections-app.js";
 import { wakeDue } from "./thread-publisher.js";
 
 export { ThreadPublisher } from "./thread-publisher.js";
@@ -56,17 +57,21 @@ export function jamsAreEnabled(value: unknown, requestUrl: string): boolean {
 
 export default {
   fetch(request, env, ctx) {
+    const baseUrl = getWorkerBaseUrl(env, request.url);
+    const onChange = (capability: string) => { ctx.waitUntil(wakeDue(env, capability)); };
     return createApp({
       resolver: new Resolver(new SpotifyClient(), new ItunesClient()),
       store: new D1LinkStore(env.DB),
       jamStore: new D1JamStore(env.DB, { maxJams: 10_000 }),
       jamsEnabled: jamsAreEnabled(env.JAMS_ENABLED, request.url),
       threadStore: new D1ThreadStore(env.DB),
-      baseUrl: getWorkerBaseUrl(env, request.url),
       appleMusic: createAppleMusicIssuer(env),
+      baseUrl,
+      connections: createMusicConnectionsApp(env, baseUrl, onChange),
       publishing: {
-        availableProviders: availablePublishers(env),
-        onChange: capability => { ctx.waitUntil(wakeDue(env, capability)); },
+        availableProviders: availableConnections(env),
+        onChange,
+        requireConnection: (authorization, provider) => requireMusicConnection(env, authorization, provider),
         retry: (authorization, provider) => new D1PublicationStore(env.DB).retry(authorization, provider),
       },
     }).fetch(request);

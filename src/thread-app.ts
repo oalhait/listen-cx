@@ -27,6 +27,7 @@ export interface ThreadPublishing {
   availableProviders: Provider[];
   onChange: (capability: string) => void;
   retry?: (authorization: ManagementAuthorization, provider: Provider) => Promise<void>;
+  requireConnection?: (authorization: ManagementAuthorization, provider: Provider) => Promise<void>;
 }
 
 export function createThreadApp({ resolver, store, baseUrl, publishing }: { resolver: Pick<Resolver, "resolve">; store: D1ThreadStore; baseUrl: string; publishing?: ThreadPublishing }) {
@@ -153,6 +154,7 @@ export function createThreadApp({ resolver, store, baseUrl, publishing }: { reso
         return c.json({ receipt: replay, thread: await view(capability) });
       }
       if (!publishing?.availableProviders.includes(body.provider)) throw new ThreadError(503, "publisher_unavailable", "This music app is not available for publishing yet.");
+      await publishing.requireConnection?.(authorized, body.provider);
     }
     else if (body.provider !== undefined) throw new ThreadError(400, "invalid_action", "Choose a supported Thread action.");
     else if (body.kind === "close" && body.id === undefined && body.ids === undefined) intent = { kind: "close" };
