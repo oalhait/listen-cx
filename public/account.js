@@ -1,3 +1,4 @@
+import { createPhotoSelection } from './profile-photo.js';
 import { threadRequest } from './thread-client.js';
 import { prepareAppleMusic } from './music-connections.js';
 import { validCapability, playlistLink, subscriptionMessage } from './subscription.js';
@@ -101,7 +102,8 @@ export function createProfileActions({ request = threadRequest, update, profileB
       pending = true;
       update({ status: 'loading', message: 'Saving…' });
       try {
-        const { profile } = await request('/api/account/profile', { displayName, avatarUrl, profileBinding });
+        const photo = typeof details.avatarImageBase64 === 'string' ? { avatarImageBase64: details.avatarImageBase64 } : { avatarUrl };
+        const { profile } = await request('/api/account/profile', { displayName, ...photo, profileBinding });
         if (!profile || typeof profile.displayName !== 'string') throw new Error('Profile unavailable');
         update({ status: 'success', profile, message: 'Profile saved.' });
       } catch {
@@ -120,34 +122,57 @@ export function mountAccountProfile(form, data, request = threadRequest) {
   const preview = form.querySelector('#profile-preview');
   const message = form.querySelector('#profile-message');
   const button = form.querySelector('button[type="submit"]');
-  const showPhoto = () => {
-    const url = safeProfilePhoto(photo.value.trim());
-    preview.hidden = !url;
-    if (url) preview.src = url;
-    else preview.removeAttribute('src');
+  const remove = form.querySelector('#profile-remove-photo');
+  let saving = false;
+  let preparing = false;
+  let previewUrl = null;
+  const controls = () => {
+    const busy = saving || preparing;
+    form.setAttribute('aria-busy', String(busy));
+    name.disabled = saving;
+    photo.disabled = saving;
+    remove.disabled = busy || !previewUrl;
+    button.disabled = busy;
+    button.textContent = saving ? 'Saving…' : 'Save profile';
   };
+  const selection = createPhotoSelection({ update(state) {
+    preparing = state.status === 'loading';
+    previewUrl = state.previewUrl;
+    preview.hidden = !previewUrl;
+    if (previewUrl) preview.src = previewUrl;
+    else preview.removeAttribute('src');
+    message.textContent = state.message;
+    message.dataset.status = state.status;
+    controls();
+  } });
   const showProfile = profile => {
     name.value = profile?.displayName || 'Listener';
-    photo.value = profile?.avatarUrl || '';
-    showPhoto();
+    photo.value = '';
+    selection.reset(safeProfilePhoto(profile?.avatarUrl));
   };
   showProfile(data.profile);
   preview.addEventListener('error', () => { preview.hidden = true; });
-  photo.addEventListener('change', showPhoto);
+  photo.addEventListener('change', () => {
+    const file = photo.files?.[0];
+    photo.value = '';
+    void selection.select(file);
+  });
+  remove.addEventListener('click', () => {
+    if (saving || preparing) return;
+    photo.value = '';
+    selection.remove();
+  });
   const actions = createProfileActions({ request, profileBinding: data.profileBinding, update(state) {
-    const busy = state.status === 'loading';
-    form.setAttribute('aria-busy', String(busy));
-    name.disabled = busy;
-    photo.disabled = busy;
-    button.disabled = busy;
-    button.textContent = busy ? 'Saving…' : 'Save profile';
+    saving = state.status === 'loading';
+    if (state.status === 'success') showProfile(state.profile);
+    controls();
     message.textContent = state.message;
     message.dataset.status = state.status;
-    if (state.status === 'success') showProfile(state.profile);
   } });
   form.addEventListener('submit', event => {
     event.preventDefault();
-    void actions.save({ displayName: name.value, avatarUrl: photo.value });
+    if (preparing) return;
+    void actions.save({ displayName: name.value, ...selection.details() });
   });
 }
 

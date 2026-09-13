@@ -98,3 +98,8 @@ button[aria-busy="true"]:disabled { cursor: wait; }
 @media (max-width: 600px) {
   .account-profile { padding: 18px; }
 }
+
+.profile-fields input[type="file"] { padding: 7px; }
+.profile-fields input::file-selector-button { margin-right: 12px; padding: 8px 12px; border: 0; border-radius: 4px; background: #f1f1ed; color: #222; font: inherit; cursor: pointer; }
+#profile-remove-photo { margin-top: 10px; }
+#profile-remove-photo:disabled { opacity: .45; cursor: default; }

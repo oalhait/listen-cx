@@ -38,3 +38,19 @@ it('does not update another account and throttles automatic profile imports', as
   expect(await profiles.claimSeed(b.id)).toBe(false);
   expect(await profiles.claimSeed(a.id)).toBe(false);
 });
+
+it('saves uploaded photos atomically, replaces its own stored photo, and removes it', async () => {
+  const account = await accounts.upsert('apple', crypto.randomUUID(), 'Apple Music');
+  const other = await accounts.upsert('spotify', crypto.randomUUID(), 'Other');
+  const bytes = new Uint8Array([1, 2, 3]);
+  const first = await profiles.updatePhoto(account.id, 'Photo owner', bytes, 'https://listen.test');
+  const id = first.avatarUrl!.split('/').at(-1)!;
+  expect(first.displayName).toBe('Photo owner');
+  expect(await profiles.photo(id)).toEqual(bytes);
+  const second = await profiles.updatePhoto(account.id, 'New name', new Uint8Array([4]), 'https://listen.test');
+  expect(second.avatarUrl).not.toBe(first.avatarUrl);
+  expect(await profiles.photo(id)).toBeNull();
+  expect((await profiles.get(other.id)).avatarUrl).toBeNull();
+  await profiles.update(account.id, { displayName: 'No photo', avatarUrl: null });
+  expect(await profiles.photo(second.avatarUrl!.split('/').at(-1)!)).toBeNull();
+});

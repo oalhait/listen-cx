@@ -1,3 +1,4 @@
+import { decodeProfilePhoto } from "./profile-photo.js";
 import { D1ProfileStore } from "./profile-db.js";
 import { Hono, type Context } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
@@ -56,8 +57,9 @@ export function createAccountApp(env: RuntimeEnv, baseUrl: string, onChange: (ca
     if (!account) throw new ThreadError(401, "sign_in_required", "Sign in to your music account first.");
     return account;
   }
-  async function fields(c: Context, allowed: string[]) {
-    const parsed = await readBoundedJson(c.req.raw, 16000);
+  async function fields(c: Context, allowed: string[], maxBytes = 16000) {
+    const parsed = await readBoundedJson(c.req.raw, maxBytes);
+    if (!parsed.ok && parsed.status === 413) throw new ThreadError(413, "invalid_input", "The selected photo is too large.");
     if (!parsed.ok || !isRecord(parsed.value) || Object.keys(parsed.value).some(key => !allowed.includes(key))) {
       throw new ThreadError(400, "invalid_input", "Send a valid account request.");
     }
@@ -132,9 +134,21 @@ export function createAccountApp(env: RuntimeEnv, baseUrl: string, onChange: (ca
   });
   app.post("/api/account/profile", async c => {
     const account = await signedIn(c);
-    const body = await fields(c, ["displayName", "avatarUrl", "profileBinding"]);
+    const body = await fields(c, ["displayName", "avatarUrl", "avatarImageBase64", "profileBinding"], 270000);
     await validateBinding(c, account, body.profileBinding, "profile-edit-grant");
+    if (body.avatarImageBase64 !== undefined) {
+      if (body.avatarUrl !== undefined) throw new ThreadError(400, "invalid_input", "Choose a single profile photo.");
+      return c.json({ profile: await profiles.updatePhoto(account.id, body.displayName, decodeProfilePhoto(body.avatarImageBase64), origin) });
+    }
     return c.json({ profile: await profiles.update(account.id, { displayName: body.displayName, avatarUrl: body.avatarUrl }) });
+  });
+  app.get("/profile-photos/:id", async c => {
+    const photo = await profiles.photo(c.req.param("id"));
+    if (!photo) return c.notFound();
+    c.header("Content-Type", "image/png");
+    c.header("Content-Security-Policy", "default-src 'none'; sandbox");
+    c.header("X-Content-Type-Options", "nosniff");
+    return c.body(photo.slice().buffer);
   });
   app.post("/account/sign-out", async c => {
     await fields(c, []);

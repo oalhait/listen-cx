@@ -263,7 +263,8 @@ and removal. Profile edits update existing bylines without changing song order o
 publication revisions. Historical and signed-out contributions have no recorded author;
 the interface labels them Guest rather than guessing who added them.
 
-Account settings include an editable display name and optional HTTPS photo URL.
+Account settings include an editable display name and a photo upload picker. JPG, PNG, and WebP
+files up to 10 MB are converted locally to a 192×192 PNG before saving.
 Spotify seeds these from its authenticated profile API; existing connected users are
 imported when they open settings. A failed import leaves settings usable and is retried
 at most hourly. Apple Music's supported API does not expose a user name or photo, so
@@ -272,9 +273,13 @@ a user-edited profile is never overwritten by a provider reconnect or import. Li
 providers share one profile, with the anchor account's edits taking precedence.
 
 `GET /api/account` includes `profile` and a short-lived `profileBinding`.
-`POST /api/account/profile` accepts `{displayName, avatarUrl, profileBinding}` and
+`POST /api/account/profile` accepts `{displayName, avatarUrl, profileBinding}` for
+existing or removed photos, or `{displayName, avatarImageBase64, profileBinding}`
+for uploads, and
 requires the same signed-in session that loaded the form. Names contain 1–80 characters;
-photos are optional HTTPS URLs, fetched by the browser with no referrer. Migration
+uploads are bounded to 192 KiB and 256×256 pixels, stored with the profile in one
+D1 transaction, and served as PNG with no sniffing or caching. Migration `0012` adds
+photo storage; provider-seeded HTTPS photos remain supported. Migration
 `0011_song_attribution.sql` is additive and must be applied before the updated Worker.
 
 ### Publisher configuration

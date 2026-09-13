@@ -280,7 +280,7 @@ it('deduplicates profile saves and permits retry after a private failure', async
 it('edits the seeded profile with independent loading, preview, and success state', async () => {
   const element = () => ({ value: '', hidden: false, disabled: false, dataset: {}, events: {}, textContent: '',
     setAttribute: vi.fn(), removeAttribute: vi.fn(), addEventListener(name, callback) { this.events[name] = callback; } });
-  const selectors = Object.fromEntries(['#profile-name', '#profile-photo', '#profile-preview', '#profile-message', 'button[type="submit"]'].map(key => [key, element()]));
+  const selectors = Object.fromEntries(['#profile-name', '#profile-photo', '#profile-preview', '#profile-remove-photo', '#profile-message', 'button[type="submit"]'].map(key => [key, element()]));
   const form = { ...element(), querySelector: selector => selectors[selector] };
   let finish;
   const request = vi.fn().mockImplementation(() => new Promise(resolve => { finish = resolve; }));
@@ -290,8 +290,7 @@ it('edits the seeded profile with independent loading, preview, and success stat
   expect(form.hidden).toBe(false);
   expect(selectors['#profile-name'].value).toBe('Seeded listener');
   expect(selectors['#profile-preview'].src).toBe('https://example.com/original.jpg');
-  selectors['#profile-photo'].value = 'javascript:alert(1)';
-  selectors['#profile-photo'].events.change();
+  selectors['#profile-remove-photo'].events.click();
   expect(selectors['#profile-preview'].hidden).toBe(true);
   expect(selectors['#profile-preview'].removeAttribute).toHaveBeenCalledWith('src');
   selectors['#profile-name'].value = '  My own name  ';
@@ -321,4 +320,53 @@ it('refuses profile saves without the account snapshot binding', async () => {
     expect(request).not.toHaveBeenCalled();
     expect(update).toHaveBeenLastCalledWith({ status: 'error', message: 'Refresh your account before saving your profile.' });
   }
+});
+
+it('renders a labeled image picker instead of a photo URL field', () => {
+  expect(accountPage()).toContain('type="file"');
+  expect(accountPage()).toContain('accept="image/jpeg,image/png,image/webp"');
+  expect(accountPage()).toContain('Remove photo');
+  expect(accountPage()).not.toContain('Photo URL');
+});
+
+it('sends a selected photo atomically with the name and snapshot binding', async () => {
+  const request = vi.fn().mockResolvedValue({ profile: { displayName: 'Omar', avatarUrl: 'https://listen.cx/avatar.png' } });
+  const actions = createProfileActions({ request, update: vi.fn(), profileBinding: 'original-session' });
+  await actions.save({ displayName: ' Omar ', avatarImageBase64: 'cGhvdG8=' });
+  expect(request).toHaveBeenCalledExactlyOnceWith('/api/account/profile', {
+    displayName: 'Omar', avatarImageBase64: 'cGhvdG8=', profileBinding: 'original-session',
+  });
+});
+
+it('previews a selected file, blocks saving during decoding, and saves its image with the name', async () => {
+  const element = () => ({ value: '', hidden: false, disabled: false, dataset: {}, events: {}, textContent: '',
+    setAttribute: vi.fn(), removeAttribute: vi.fn(), addEventListener(name, callback) { this.events[name] = callback; } });
+  const selectors = Object.fromEntries(['#profile-name', '#profile-photo', '#profile-preview', '#profile-remove-photo', '#profile-message', 'button[type="submit"]'].map(key => [key, element()]));
+  const form = { ...element(), querySelector: selector => selectors[selector] };
+  let decode;
+  const bitmap = { width: 192, height: 192, close: vi.fn() };
+  vi.stubGlobal('createImageBitmap', () => new Promise(resolve => { decode = resolve; }));
+  vi.stubGlobal('document', { createElement: () => ({
+    getContext: () => ({ drawImage: vi.fn() }),
+    toBlob: callback => callback(new Blob(['png'], { type: 'image/png' })),
+  }) });
+  const request = vi.fn().mockResolvedValue({ profile: { displayName: 'Omar', avatarUrl: 'https://listen.cx/photo.png' } });
+  try {
+    mountAccountProfile(form, { account: {}, profileBinding: 'original-binding', profile: { displayName: 'Omar', avatarUrl: 'https://example.com/seed.jpg' } }, request);
+    selectors['#profile-photo'].files = [{ type: 'image/png', size: 100 }];
+    selectors['#profile-photo'].events.change();
+    expect(selectors['button[type="submit"]'].disabled).toBe(true);
+    expect(selectors['#profile-remove-photo'].disabled).toBe(true);
+    form.events.submit({ preventDefault() {} });
+    expect(request).not.toHaveBeenCalled();
+    decode(bitmap);
+    await vi.waitFor(() => expect(selectors['button[type="submit"]'].disabled).toBe(false));
+    expect(selectors['#profile-preview'].src).toBe('data:image/png;base64,cG5n');
+    form.events.submit({ preventDefault() {} });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledExactlyOnceWith('/api/account/profile', {
+      displayName: 'Omar', avatarImageBase64: 'cG5n', profileBinding: 'original-binding',
+    }));
+    expect(bitmap.close).toHaveBeenCalledOnce();
+    expect(selectors['#profile-preview'].src).toBe('https://listen.cx/photo.png');
+  } finally { vi.unstubAllGlobals(); }
 });

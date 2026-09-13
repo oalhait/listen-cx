@@ -265,3 +265,29 @@ it('rejects profile edits from a stale, different, or missing session binding', 
   expect((await post('/api/account/profile', { ...body, profileBinding: expired }, owner.cookie)).status).toBe(403);
   expect((await post('/api/account/profile', body, owner.cookie)).status).toBe(200);
 });
+
+it('uploads bounded profile photos with session protection and serves only inert PNG bytes', async () => {
+  const owner = await login('apple');
+  const other = await login('spotify');
+  const { profileBinding } = await (await get('/api/account', owner.cookie)).json() as { profileBinding: string };
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZ1sAAAAASUVORK5CYII=';
+  const body = { displayName: 'Photo owner', avatarImageBase64: png, profileBinding };
+  expect((await post('/api/account/profile', body)).status).toBe(401);
+  expect((await post('/api/account/profile', body, other.cookie)).status).toBe(403);
+  expect((await post('/api/account/profile', { ...body, avatarUrl: null }, owner.cookie)).status).toBe(400);
+  expect((await post('/api/account/profile', { ...body, avatarImageBase64: btoa('<svg onload="alert(1)"></svg>') }, owner.cookie)).status).toBe(400);
+  expect((await post('/api/account/profile', { ...body, avatarImageBase64: 'a'.repeat(280000) }, owner.cookie)).status).toBe(413);
+  const response = await post('/api/account/profile', body, owner.cookie);
+  expect(response.status).toBe(200);
+  const { profile } = await response.json() as { profile: { displayName: string; avatarUrl: string } };
+  expect(profile.avatarUrl).toMatch(/^https:\/\/staging\.listen\.cx\/profile-photos\/[a-f0-9-]{36}$/);
+  const path = new URL(profile.avatarUrl).pathname;
+  const photo = await get(path);
+  expect(photo.status).toBe(200);
+  expect(photo.headers.get('Content-Type')).toBe('image/png');
+  expect(photo.headers.get('X-Content-Type-Options')).toBe('nosniff');
+  expect(photo.headers.get('Content-Security-Policy')).toContain("default-src 'none'");
+  expect(new Uint8Array(await photo.arrayBuffer())).toEqual(Uint8Array.from(atob(png), c => c.charCodeAt(0)));
+  await post('/api/account/profile', { displayName: 'Name only', avatarUrl: null, profileBinding }, owner.cookie);
+  expect((await get(path)).status).toBe(404);
+});
