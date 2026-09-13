@@ -55,6 +55,22 @@ it("keeps account history across sessions and separates it from other accounts o
   expect(await (await get("/api/my-threads", `listen_account=${token}`)).json()).toMatchObject({ threads: [{ title: "Account Thread" }] });
 });
 
+it("lists subscribed Threads for the signed-in account and identifies ownership", async () => {
+  const owner = await account();
+  const ownedResponse = await post("/api/threads", { title: "Owned Thread", creationKey: key() }, owner.cookie);
+  const owned = await ownedResponse.json() as { thread: { publicCapability: string } };
+  const subscribed = await threads.create("Subscribed Thread", key());
+  const accounts = new D1AccountStore(env.DB);
+  await accounts.subscribe(owner.id, owned.thread.publicCapability);
+  await accounts.subscribe(owner.id, subscribed.publicCapability);
+
+  const result = await (await get("/api/my-threads", owner.cookie)).json() as { threads: unknown[] };
+  expect(result.threads).toEqual(expect.arrayContaining([
+    expect.objectContaining({ title: "Owned Thread", relationship: "owner" }),
+    expect.objectContaining({ title: "Subscribed Thread", relationship: "subscriber" }),
+  ]));
+});
+
 it("recovers historical Threads only with a verified private management capability", async () => {
   const secret = key();
   const old = await threads.create("Recovered older Thread", secret);

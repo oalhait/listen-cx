@@ -11,6 +11,11 @@ export function parseManagementLink(value, origin) {
   } catch { throw new Error('Paste the full private management link, including the part after #manage=.'); }
 }
 
+export function threadHistoryMeta(thread, created = '') {
+  const relationship = thread.relationship === 'subscriber' ? 'Subscribed' : 'Owner';
+  return `${relationship} · ${thread.songCount} ${thread.songCount === 1 ? 'song' : 'songs'} · ${thread.closedAt ? 'Closed' : 'Open'}${created ? ` · ${created}` : ''}`;
+}
+
 export function createHistoryController({ fetcher = fetch, request = threadRequest, update }) {
   let busy = false;
   return async (action, body = {}) => {
@@ -56,8 +61,8 @@ export function mountThreadHistory(root) {
       title.textContent = thread.title;
       const meta = document.createElement('span');
       const date = new Date(`${thread.createdAt.replace(' ', 'T')}Z`);
-      const created = Number.isNaN(date.getTime()) ? '' : ` · ${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
-      meta.textContent = `${thread.songCount} ${thread.songCount === 1 ? 'song' : 'songs'} · ${thread.closedAt ? 'Closed' : 'Open'}${created}`;
+      const created = Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+      meta.textContent = threadHistoryMeta(thread, created);
       link.append(title, meta);
       row.append(link);
       list.append(row);

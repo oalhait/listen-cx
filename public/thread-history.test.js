@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { parseManagementLink, createHistoryController } from './thread-history.js';
+import { parseManagementLink, createHistoryController, threadHistoryMeta } from './thread-history.js';
 
 const origin = 'https://staging.listen.cx';
 const capability = 'a'.repeat(22);
@@ -28,4 +28,9 @@ it('clears loading after a failed read and allows a retry', async () => {
   expect(update).toHaveBeenLastCalledWith(expect.objectContaining({ busy: false, error: expect.any(String) }));
   await load();
   expect(update).toHaveBeenLastCalledWith({ busy: false, data: { threads: [] }, saved: false });
+});
+it('labels owned and subscribed Threads in their list metadata', () => {
+  const thread = { songCount: 2, closedAt: null, createdAt: '2026-09-13 12:00:00' };
+  expect(threadHistoryMeta({ ...thread, relationship: 'owner' }, 'Sep 13, 2026')).toBe('Owner · 2 songs · Open · Sep 13, 2026');
+  expect(threadHistoryMeta({ ...thread, relationship: 'subscriber' }, 'Sep 13, 2026')).toBe('Subscribed · 2 songs · Open · Sep 13, 2026');
 });

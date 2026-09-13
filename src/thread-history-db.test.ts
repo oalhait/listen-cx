@@ -40,6 +40,33 @@ it("unions both linked accounts and the current browser without exposing another
   expect(await history.list({ accountId: "missing", browserDigest: null })).toEqual([]);
 });
 
+it("includes connected subscriptions once and keeps owned Threads identified as owner", async () => {
+  const prefix = nanoid();
+  const accounts = new D1AccountStore(env.DB);
+  const history = new D1ThreadHistoryStore(env.DB);
+  const threads = new D1ThreadStore(env.DB);
+  const spotify = await accounts.upsert("spotify", `${prefix}:spotify`, "Spotify");
+  const apple = await accounts.upsert("apple", `${prefix}:apple`, "Apple");
+  await accounts.createSession(spotify.id, `${prefix}:session`, Date.now() + 60_000);
+  expect(await accounts.linkAccounts(spotify.id, apple.id, `${prefix}:session`)).toBe(true);
+  const owned = await threads.create("Owned", nanoid(22));
+  const subscribed = await threads.create("Subscribed", nanoid(22));
+  const disconnected = await threads.create("Disconnected", nanoid(22));
+  await history.remember(owned.publicCapability, { accountId: spotify.id, browserDigest: null });
+  await accounts.subscribe(spotify.id, owned.publicCapability);
+  await accounts.subscribe(spotify.id, subscribed.publicCapability);
+  await accounts.subscribe(apple.id, subscribed.publicCapability);
+  await accounts.subscribe(apple.id, disconnected.publicCapability);
+  await accounts.unsubscribe(apple.id, disconnected.publicCapability);
+
+  expect(await history.list({ accountId: apple.id, browserDigest: null })).toEqual(expect.arrayContaining([
+    expect.objectContaining({ capability: owned.publicCapability, relationship: "owner" }),
+    expect.objectContaining({ capability: subscribed.publicCapability, relationship: "subscriber" }),
+  ]));
+  expect((await history.list({ accountId: apple.id, browserDigest: null })).filter(entry => entry.capability === subscribed.publicCapability)).toHaveLength(1);
+  expect((await history.list({ accountId: apple.id, browserDigest: null })).some(entry => entry.capability === disconnected.publicCapability)).toBe(false);
+});
+
 it("keeps browser history saved before linking visible to either provider login", async () => {
   const prefix = nanoid();
   const accounts = new D1AccountStore(env.DB);
