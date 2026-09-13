@@ -349,6 +349,11 @@ Direct MusicKit onboarding was subsequently deployed to staging (version
 and the live settings page enabled Apple Music after SDK preparation. The embedded
 browser did not expose an authorization window; user consent and personal subscription
 readback still need verification in a regular browser.
+Dual-provider connections were deployed after a fresh staging export and migration
+`0009` (version `c82892f0-976d-4098-b0fe-16add9b6182c`). Ninety focused tests and
+typecheck passed, including both connection directions, independent subscriptions,
+session revocation, and history preservation. Live settings and Thread pages show both
+providers; simultaneous personal playlist readback still requires user authorization.
 Migrations `0004`–`0006` were also applied after exporting staging. Production has
 not been redeployed. Historical D1 migration files remain unchanged; no remote
 rows have been deleted. Existing source metadata retains its original values,
