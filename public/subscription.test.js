@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { createSubscriptionController, playlistLink, subscriptionMessage } from './subscription.js';
+import { createSubscriptionController, mountSubscription, playlistLink, subscriptionMessage, providerSubscriptions } from './subscription.js';
 
 const subscription = { provider: 'spotify', connected: true, status: 'synced', requestedRevision: 2, appliedRevision: 2,
   verifiedPlaylistId: 'a'.repeat(22), verifiedPlaylistUrl: `https://open.spotify.com/playlist/${'a'.repeat(22)}` };
@@ -36,8 +36,8 @@ it('keeps one request in flight and refreshes after a personal action', async ()
   expect(fetcher).toHaveBeenCalledTimes(1);
   finish({ ok: true, json: async () => data });
   await pending;
-  await controller.act('subscribe');
-  expect(request).toHaveBeenCalledWith(`/api/threads/${'a'.repeat(22)}/subscription`, { action: 'subscribe' });
+  await controller.act('subscribe', 'spotify');
+  expect(request).toHaveBeenCalledWith(`/api/threads/${'a'.repeat(22)}/subscription`, { action: 'subscribe', provider: 'spotify' });
   expect(fetcher).toHaveBeenCalledTimes(2);
   expect(update).toHaveBeenLastCalledWith({ data, busy: false, stale: false });
 });
@@ -68,4 +68,92 @@ it('pauses polling while hidden and refreshes when visible', async () => {
   controller.stop();
   await controller.refresh();
   expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
+
+it('keeps both providers and their independent subscriptions visible', () => {
+  const apple = { account: { provider: 'apple', connected: true }, subscription: { provider: 'apple', connected: false } };
+  const spotify = { account: data.account, subscription };
+  expect(providerSubscriptions({ ...data, connections: [spotify, apple] })).toEqual([
+    { provider: 'apple', name: 'Apple Music', ...apple },
+    { provider: 'spotify', name: 'Spotify', ...spotify },
+  ]);
+  expect(providerSubscriptions({ ...data, connections: [spotify] })[0]).toEqual({ provider: 'apple', name: 'Apple Music', account: null, subscription: null });
+  expect(providerSubscriptions({ account: null, connections: [] }).every(connection => connection.account === null)).toBe(true);
+});
+
+it('targets each subscription action at the selected provider and refreshes the combined state', async () => {
+  const both = { ...data, connections: [{ account: data.account, subscription }, { account: { provider: 'apple', connected: true }, subscription: null }] };
+  const fetcher = vi.fn().mockResolvedValue({ ok: true, json: async () => both });
+  const request = vi.fn().mockResolvedValue({});
+  const update = vi.fn();
+  const schedule = vi.fn();
+  const controller = createSubscriptionController({ capability: 'a'.repeat(22), fetcher, request, update, schedule, cancel: vi.fn() });
+  for (const [action, provider] of [['subscribe', 'apple'], ['unsubscribe', 'spotify'], ['retry', 'apple']]) {
+    await controller.act(action, provider);
+    expect(request).toHaveBeenLastCalledWith(`/api/threads/${'a'.repeat(22)}/subscription`, { action, provider });
+    expect(update).toHaveBeenLastCalledWith({ data: both, busy: false, stale: false });
+  }
+  expect(fetcher).toHaveBeenCalledTimes(3);
+  expect(schedule).toHaveBeenCalledTimes(3);
+  await controller.act('subscribe', 'unsupported');
+  await controller.act('subscribe');
+  expect(request).toHaveBeenCalledTimes(3);
+});
+
+
+it('renders independent playlist actions and leaves Apple subscribed when Spotify is unsubscribed', async () => {
+  const element = () => ({ dataset: {}, children: [], selectors: {}, events: {}, textContent: '',
+    setAttribute: vi.fn(), removeAttribute: vi.fn(), contains: () => true,
+    append(...children) { this.children.push(...children); },
+    addEventListener(name, handler) { this.events[name] = handler; },
+    querySelector(selector) { return this.selectors[selector]; },
+  });
+  const root = element();
+  root.dataset.capability = 'a'.repeat(22);
+  root.selectors['[data-subscriptions-status]'] = element();
+  root.selectors['[data-subscription-settings]'] = element();
+  const cards = {};
+  for (const provider of ['apple', 'spotify']) {
+    const card = element();
+    card.dataset.subscriptionProvider = provider;
+    for (const selector of ['[data-subscription-status]', '[data-subscription-connect]', '[data-subscription-playlist]']) card.selectors[selector] = element();
+    card.actions = ['subscribe', 'retry', 'unsubscribe'].map(action => {
+      const button = element();
+      button.dataset.subscriptionAction = action;
+      button.closest = () => card;
+      return button;
+    });
+    card.querySelectorAll = () => card.actions;
+    root.selectors[`[data-subscription-provider="${provider}"]`] = card;
+    cards[provider] = card;
+  }
+  const appleSubscription = { ...subscription, provider: 'apple', verifiedPlaylistId: 'p.abc', verifiedPlaylistUrl: 'https://music.apple.com/us/playlist/road-trip/pl.u-abc' };
+  let both = { ...data, connections: [{ account: { provider: 'apple', connected: true }, subscription: appleSubscription }, { account: data.account, subscription }] };
+  const fetcher = vi.fn(async (path, options) => {
+    if (options.method === 'POST') {
+      expect(JSON.parse(options.body)).toEqual({ action: 'unsubscribe', provider: 'spotify' });
+      both = { ...both, connections: [both.connections[0], { account: data.account, subscription: { ...subscription, connected: false } }] };
+    }
+    return { ok: true, json: async () => both };
+  });
+  vi.stubGlobal('document', { hidden: false, createElement: element, addEventListener: vi.fn() });
+  vi.stubGlobal('window', { addEventListener: vi.fn() });
+  vi.stubGlobal('fetch', fetcher);
+  let controller;
+  try {
+    controller = mountSubscription(root);
+    await vi.waitFor(() => expect(cards.apple.selectors['[data-subscription-status]'].textContent).toContain('up to date'));
+    for (const provider of ['apple', 'spotify']) {
+      expect(cards[provider].actions[0].hidden).toBe(true);
+      expect(cards[provider].actions[2].hidden).toBe(false);
+      expect(cards[provider].selectors['[data-subscription-playlist]'].hidden).toBe(false);
+    }
+    root.events.click({ target: { closest: () => cards.spotify.actions[2] } });
+    await vi.waitFor(() => expect(cards.spotify.actions[0].hidden).toBe(false));
+    expect(cards.spotify.actions[2].hidden).toBe(true);
+    expect(cards.apple.actions[0].hidden).toBe(true);
+    expect(cards.apple.actions[2].hidden).toBe(false);
+    expect(cards.apple.selectors['[data-subscription-playlist]'].href).toBe(appleSubscription.verifiedPlaylistUrl);
+  } finally { controller?.stop(); vi.unstubAllGlobals(); }
 });

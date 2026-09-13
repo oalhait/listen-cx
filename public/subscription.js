@@ -34,6 +34,14 @@ export function subscriptionMessage(data) {
   return `Your ${provider} playlist is waiting to sync.`;
 }
 
+export function providerSubscriptions(data) {
+  const connections = data?.connections ?? (data?.account ? [data] : []);
+  return [['apple', 'Apple Music'], ['spotify', 'Spotify']].map(([provider, name]) => {
+    const connection = connections.find(connection => connection.account?.provider === provider);
+    return { provider, name, account: connection?.account ?? null, subscription: connection?.subscription ?? null };
+  });
+}
+
 export function createSubscriptionController({ capability, fetcher = fetch, request = threadRequest, update,
   isVisible = () => true, schedule = callback => setTimeout(callback, 5000), cancel = clearTimeout }) {
   const path = `/api/threads/${encodeURIComponent(capability)}/subscription`;
@@ -46,15 +54,15 @@ export function createSubscriptionController({ capability, fetcher = fetch, requ
     cancel(timer);
     if (!stopped && isVisible()) timer = schedule(() => { void run(); });
   };
-  const run = async action => {
+  const run = async (action, provider) => {
     if (stopped || pending || !validCapability(capability) || (!action && !isVisible())) return;
     pending = true;
     cancel(timer);
     update({ data, busy: true, stale });
     try {
       if (action) {
-        if (!['subscribe', 'retry', 'unsubscribe'].includes(action)) throw new Error('Invalid action');
-        await request(path, { action });
+        if (!['subscribe', 'retry', 'unsubscribe'].includes(action) || !['apple', 'spotify'].includes(provider)) throw new Error('Invalid action');
+        await request(path, { action, provider });
       }
       const response = await fetcher(path, { credentials: 'same-origin', headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10000) });
       if (!response.ok) throw new Error('Status unavailable');
@@ -71,7 +79,7 @@ export function createSubscriptionController({ capability, fetcher = fetch, requ
   };
   return {
     refresh: () => run(),
-    act: action => run(action),
+    act: (action, provider) => run(action, provider),
     visibilityChanged() { cancel(timer); if (isVisible()) void run(); },
     stop() { stopped = true; cancel(timer); },
   };
@@ -80,9 +88,8 @@ export function createSubscriptionController({ capability, fetcher = fetch, requ
 export function mountSubscription(root) {
   const capability = root.dataset.capability;
   if (!validCapability(capability)) return;
-  const status = root.querySelector('[data-subscription-status]');
+  const status = root.querySelector('[data-subscriptions-status]');
   const settings = root.querySelector('[data-subscription-settings]');
-  const playlist = root.querySelector('[data-subscription-playlist]');
   settings.href = `/settings?thread=${encodeURIComponent(capability)}`;
   const refresh = document.createElement('button');
   refresh.type = 'button';
@@ -100,33 +107,37 @@ export function mountSubscription(root) {
     isVisible: () => !document.hidden,
     update({ data, busy, stale }) {
       root.setAttribute('aria-busy', String(busy));
-      status.textContent = stale
-        ? `Status could not be refreshed. ${data?.subscription ? `Last recorded state: ${data.subscription.status}. This may be out of date.` : 'Try refreshing again.'}`
-        : data ? subscriptionMessage(data) : 'Loading your playlist status…';
+      status.textContent = stale ? 'Status could not be refreshed. The playlist details below may be out of date.'
+        : !data ? 'Loading your playlist status…' : !data.account ? 'Connect your music services to subscribe.' : '';
       refresh.hidden = !stale;
       refresh.disabled = busy;
-      const subscription = data?.subscription;
-      const provider = data?.account?.provider;
-      const supported = provider === 'spotify' || provider === 'apple';
-      const connected = supported && data?.account?.connected;
-      const link = playlistLink(subscription);
-      playlist.hidden = !link;
-      if (link) { playlist.href = link; playlist.textContent = 'Open your playlist ↗'; }
-      else playlist.removeAttribute('href');
-      note.hidden = provider !== 'apple';
-      root.querySelectorAll('[data-subscription-action]').forEach(button => {
-        const action = button.dataset.subscriptionAction;
-        button.hidden = action === 'subscribe' ? !connected || subscription?.connected
-          : action === 'unsubscribe' ? !subscription?.connected
-          : !subscription?.connected || !['failed', 'blocked'].includes(subscription.status);
-        button.disabled = busy;
-        if (action === 'subscribe') button.textContent = `Subscribe on ${provider === 'apple' ? 'Apple Music' : 'Spotify'}`;
-      });
+      note.hidden = !providerSubscriptions(data).some(connection => connection.provider === 'apple' && connection.account);
+      for (const connection of providerSubscriptions(data)) {
+        const { provider, name, account, subscription } = connection;
+        const card = root.querySelector(`[data-subscription-provider="${provider}"]`);
+        card.querySelector('[data-subscription-status]').textContent = !data ? 'Loading…'
+          : account ? subscriptionMessage(connection) : `Connect ${name} in account settings to subscribe.`;
+        const connect = card.querySelector('[data-subscription-connect]');
+        connect.href = settings.href;
+        connect.hidden = !data || !!account?.connected;
+        const playlist = card.querySelector('[data-subscription-playlist]');
+        const link = playlistLink(subscription);
+        playlist.hidden = !link;
+        if (link) { playlist.href = link; playlist.textContent = `Open in ${name} ↗`; }
+        else playlist.removeAttribute('href');
+        card.querySelectorAll('[data-subscription-action]').forEach(button => {
+          const action = button.dataset.subscriptionAction;
+          button.hidden = action === 'subscribe' ? !account?.connected || subscription?.connected
+            : action === 'unsubscribe' ? !subscription?.connected
+            : !account?.connected || !subscription?.connected || !['failed', 'blocked'].includes(subscription.status);
+          button.disabled = busy;
+        });
+      }
     },
   });
   root.addEventListener('click', event => {
     const button = event.target.closest('[data-subscription-action]');
-    if (button && root.contains(button)) void controller.act(button.dataset.subscriptionAction);
+    if (button && root.contains(button)) void controller.act(button.dataset.subscriptionAction, button.closest('[data-subscription-provider]')?.dataset.subscriptionProvider);
   });
   refresh.addEventListener('click', () => { void controller.refresh(); });
   document.addEventListener('visibilitychange', controller.visibilityChanged);

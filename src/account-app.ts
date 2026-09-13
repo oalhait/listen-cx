@@ -17,6 +17,11 @@ const browserCookie = "listen_login_browser";
 const appleBrowserCookie = "listen_apple_browser";
 type PendingLogin = { provider: Provider; verifier: string; redirectUri: string; returnTo: string; accountId: string | null; sessionHash: string | null };
 
+function publicAccount(account: Account) {
+  return { provider: account.provider, label: account.label, connected: Boolean(account.credentials),
+    browserOnly: account.provider === "apple" && account.subject.startsWith("browser:") };
+}
+
 export function publicSubscription(value: Subscription | null) {
   if (!value) return null;
   return { capability: value.capability, title: value.title, provider: value.provider, connected: value.connected,
@@ -31,6 +36,19 @@ export function createAccountApp(env: RuntimeEnv, baseUrl: string, onChange: (ca
   const origin = new URL(baseUrl).origin;
   const appleAvailable = () => availableConnections(env).includes("apple");
   const current = (c: Context) => currentAccount(c, env.DB);
+  async function validateConnection(owner: Account, target: Account) {
+    const connections = await store.connections(owner.id);
+    if (connections.some(value => value.provider === target.provider && value.id !== target.id)
+      || (target.groupId !== owner.groupId && (await store.connections(target.id)).length > 1)) {
+      throw new ThreadError(409, "different_account", "This music account is already connected elsewhere, or a different account for this provider is connected here.");
+    }
+  }
+  async function appleBrowser(c: Context) {
+    let browser = getCookie(c, appleBrowserCookie);
+    if (!browser || !/^[A-Za-z0-9_-]{43}$/.test(browser)) browser = (await makePkce()).challenge;
+    setCookie(c, appleBrowserCookie, browser, { httpOnly: true, secure: origin.startsWith("https:"), sameSite: "Lax", path: "/", maxAge: 365 * 86400 });
+    return browser;
+  }
   async function signedIn(c: Context): Promise<Account> {
     const account = await current(c);
     if (!account) throw new ThreadError(401, "sign_in_required", "Sign in to your music account first.");
@@ -94,10 +112,11 @@ export function createAccountApp(env: RuntimeEnv, baseUrl: string, onChange: (ca
   });
   app.get("/api/account", async c => {
     const account = await current(c);
-    return c.json({ account: account ? { provider: account.provider, label: account.label, connected: Boolean(account.credentials), browserOnly: account.provider === "apple" && account.subject.startsWith("browser:") } : null,
+    const connections = account ? await store.connections(account.id) : [];
+    return c.json({ account: account ? publicAccount(account) : null, connections: connections.map(publicAccount),
       authorizationBinding: account ? await binding(c, account) : null,
       available: { spotify: availableConnections(env).includes("spotify"), apple: appleAvailable() },
-      subscriptions: account ? (await store.subscriptions(account.id)).map(publicSubscription) : [] });
+      subscriptions: (await Promise.all(connections.map(value => store.subscriptions(value.id)))).flat().map(publicSubscription) });
   });
   app.post("/account/sign-out", async c => {
     await fields(c, []);
@@ -119,7 +138,6 @@ export function createAccountApp(env: RuntimeEnv, baseUrl: string, onChange: (ca
     const body = await fields(c, ["returnTo"]);
     const returnTo = typeof body.returnTo === "string" && isThreadCapability(body.returnTo) ? body.returnTo : "";
     const account = await current(c);
-    if (account && account.provider !== provider) throw new ThreadError(409, "one_provider_only", "Sign out before choosing a different music provider.");
     const pkce = await makePkce();
     const state = `account.${crypto.randomUUID()}`;
     const previousBrowser = getCookie(c, browserCookie);
@@ -161,9 +179,13 @@ export function createAccountApp(env: RuntimeEnv, baseUrl: string, onChange: (ca
         account = await store.upsert("apple", identity.subject, "Apple Music");
       }
       const existing = await current(c);
-      if ((pending.accountId && (pending.accountId !== account.id || existing?.id !== pending.accountId)) || (existing && existing.id !== account.id)) throw new Error();
+      if (pending.accountId) {
+        if (existing?.id !== pending.accountId || pending.sessionHash !== await sha256(getCookie(c, sessionCookie) ?? "")) throw new Error();
+        await validateConnection(existing, account);
+      } else if (existing && existing.id !== account.id) throw new Error();
       if (credentials) await saveCredentials(account, credentials);
-      await session(c, account, pending.sessionHash);
+      if (pending.accountId && !await store.linkAccounts(pending.accountId, account.id, pending.sessionHash!)) throw new Error();
+      await session(c, pending.accountId ? existing! : account, pending.sessionHash);
       return c.redirect(`/settings${pending.returnTo ? `?thread=${encodeURIComponent(pending.returnTo)}` : ""}`, 303);
     } catch {
       return c.redirect("/settings?sign_in=failed", 303);
@@ -173,8 +195,7 @@ export function createAccountApp(env: RuntimeEnv, baseUrl: string, onChange: (ca
     await fields(c, []);
     if (await current(c)) throw new ThreadError(409, "session_changed", "Your account changed. Refresh settings before connecting music.");
     const developerToken = await appleDeveloperToken(env);
-    let browser = getCookie(c, appleBrowserCookie);
-    if (!browser || !/^[A-Za-z0-9_-]{43}$/.test(browser)) browser = (await makePkce()).challenge;
+    const browser = await appleBrowser(c);
     const browserHash = await sha256(browser);
     const nonce = crypto.randomUUID();
     const completionNonce = crypto.randomUUID();
@@ -183,24 +204,33 @@ export function createAccountApp(env: RuntimeEnv, baseUrl: string, onChange: (ca
     const authorizationBinding = JSON.stringify(await seal(env.PUBLISHER_ENCRYPTION_KEY!, "apple-browser-grant", grant));
     await store.putOAuth(await sha256(nonce), browserHash, authorizationBinding, expiresAt);
     await store.putOAuth(await sha256(completionNonce), browserHash, authorizationBinding, expiresAt);
-    setCookie(c, appleBrowserCookie, browser, { httpOnly: true, secure: origin.startsWith("https:"), sameSite: "Lax", path: "/", maxAge: 365 * 86400 });
     return c.json({ developerToken, authorizationBinding });
   });
   app.post("/account/apple/token", async c => {
     const account = await signedIn(c);
-    if (account.provider !== "apple") throw new ThreadError(403, "one_provider_only", "This account uses Spotify.");
     const body = await fields(c, ["authorizationBinding"]);
     await validateBinding(c, account, body.authorizationBinding);
-    return c.json({ developerToken: await appleDeveloperToken(env), authorizationBinding: body.authorizationBinding });
+    const developerToken = await appleDeveloperToken(env);
+    await appleBrowser(c);
+    return c.json({ developerToken, authorizationBinding: body.authorizationBinding });
   });
   app.post("/account/apple/authorize", async c => {
-    let account = await current(c);
-    if (account && account.provider !== "apple") throw new ThreadError(403, "one_provider_only", "This account uses Spotify.");
+    const owner = await current(c);
+    let account = owner;
     const body = await fields(c, ["musicUserToken", "authorizationBinding"]);
     if (typeof body.musicUserToken !== "string") throw new ThreadError(400, "invalid_input", "Authorize Apple Music first.");
     const newSession = !account;
     let completion: { stateHash: string; browserHash: string } | undefined;
-    if (account) await validateBinding(c, account, body.authorizationBinding);
+    if (owner) {
+      await validateBinding(c, owner, body.authorizationBinding);
+      account = (await store.connections(owner.id)).find(value => value.provider === "apple") ?? null;
+      if (!account) {
+        const browser = getCookie(c, appleBrowserCookie);
+        if (!browser || !/^[A-Za-z0-9_-]{43}$/.test(browser)) throw new ThreadError(403, "session_changed", "Refresh settings before connecting Apple Music.");
+        account = await store.upsert("apple", `browser:${await sha256(browser)}`, "Apple Music");
+      }
+      await validateConnection(owner, account);
+    }
     else {
       try {
         const browser = getCookie(c, appleBrowserCookie);
@@ -214,6 +244,9 @@ export function createAccountApp(env: RuntimeEnv, baseUrl: string, onChange: (ca
       } catch { throw new ThreadError(403, "session_changed", "This Apple Music connection expired. Refresh settings and try again."); }
     }
     await env.THREAD_PUBLISHER.getByName(`account_${account.id}`).authorizeAccountApple(account.id, body.musicUserToken);
+    if (owner && !await store.linkAccounts(owner.id, account.id, await sha256(getCookie(c, sessionCookie)!))) {
+      throw new ThreadError(403, "session_changed", "Your account changed. Refresh settings before connecting music.");
+    }
     if (newSession) await session(c, account, null, completion);
     for (const subscription of await store.subscriptions(account.id)) {
       if (subscription.connected) { await store.retry(account.id, subscription.capability); onChange(subscription.capability); }
@@ -222,12 +255,19 @@ export function createAccountApp(env: RuntimeEnv, baseUrl: string, onChange: (ca
   });
   app.get("/api/threads/:capability/subscription", async c => {
     const account = await current(c);
-    return c.json({ account: account ? { provider: account.provider, connected: Boolean(account.credentials) } : null,
+    const connections = account ? await store.connections(account.id) : [];
+    return c.json({ account: account ? publicAccount(account) : null,
+      connections: await Promise.all(connections.map(async value => ({ account: publicAccount(value),
+        subscription: publicSubscription(await store.subscription(value.id, c.req.param("capability"))) }))),
       subscription: account ? publicSubscription(await store.subscription(account.id, c.req.param("capability"))) : null });
   });
   app.post("/api/threads/:capability/subscription", async c => {
-    const account = await signedIn(c);
-    const body = await fields(c, ["action"]);
+    const owner = await signedIn(c);
+    const body = await fields(c, ["action", "provider"]);
+    const provider = body.provider ?? owner.provider;
+    if (provider !== "apple" && provider !== "spotify") throw new ThreadError(400, "invalid_input", "Choose Apple Music or Spotify.");
+    const account = (await store.connections(owner.id)).find(value => value.provider === provider);
+    if (!account) throw new ThreadError(403, "authorization_required", "Connect this music provider in settings first.");
     const cap = c.req.param("capability");
     if (body.action === "unsubscribe") await store.unsubscribe(account.id, cap);
     else if (body.action === "subscribe" || body.action === "retry") {

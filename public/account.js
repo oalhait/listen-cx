@@ -24,6 +24,12 @@ export async function prepareBrowserAppleMusic(request, MusicKit) {
   return { music, authorizationBinding: response.authorizationBinding };
 }
 
+export function prepareSettingsAppleMusic(data, request, MusicKit) {
+  return data.account
+    ? prepareAccountAppleMusic(data.authorizationBinding, request, MusicKit)
+    : prepareBrowserAppleMusic(request, MusicKit);
+}
+
 export function createAccountActions({ returnTo = null, request = threadRequest, navigate, reload, update, getMusic, getAuthorizationBinding = () => null }) {
   let pending = false;
   const run = async action => {
@@ -83,7 +89,6 @@ export function waitForAccountMusicKit(window, document) {
 export async function mountAccount(root) {
   const find = selector => root.querySelector(selector);
   const message = find('#account-message');
-  const reconnect = find('#account-reconnect');
   const readiness = find('#apple-readiness');
   const returnTo = accountReturn(window.location.search);
   if (returnTo) { find('#account-return').href = `/t/${returnTo}`; find('#account-return').hidden = false; }
@@ -100,19 +105,19 @@ export async function mountAccount(root) {
   refresh.hidden = true;
   message.after(refresh);
   refresh.addEventListener('click', () => window.location.reload());
+  const connections = () => data?.connections ?? (data?.account ? [data.account] : []);
   const buttons = () => {
     root.setAttribute('aria-busy', String(busy));
     refresh.disabled = busy;
     root.querySelectorAll('[data-sign-in]').forEach(button => {
+      const connection = connections().find(account => account.provider === button.dataset.signIn);
       const available = !!data?.available?.[button.dataset.signIn];
       const name = button.dataset.signIn === 'apple' ? 'Apple Music' : 'Spotify';
       const apple = button.dataset.signIn === 'apple';
-      button.disabled = busy || !available || (apple && !music);
+      button.disabled = busy || !available || (apple && (!music || !authorizationBinding));
       button.setAttribute('aria-busy', String((busy || (apple && applePreparing)) && available));
-      button.textContent = !available ? `${name} · unavailable` : apple && applePreparing ? 'Getting Apple Music ready…' : apple && appleFailed ? 'Apple Music could not load' : `Continue with ${name} ↗`;
+      button.textContent = !available ? `${name} · unavailable` : apple && applePreparing ? 'Getting Apple Music ready…' : apple && appleFailed ? 'Apple Music could not load' : `${connection ? 'Reconnect' : 'Connect'} ${name} ↗`;
     });
-    const provider = data?.account?.provider;
-    reconnect.disabled = busy || !data?.available?.[provider] || (provider === 'apple' && (!music || !authorizationBinding));
     find('#account-sign-out').disabled = busy;
   };
   const actions = createAccountActions({ returnTo, navigate: url => window.location.assign(url), reload: () => window.location.reload(),
@@ -126,58 +131,55 @@ export async function mountAccount(root) {
   });
   root.querySelectorAll('[data-sign-in]').forEach(button => button.addEventListener('click', () => { void actions.signIn(button.dataset.signIn); }));
   find('#account-sign-out').addEventListener('click', () => { void actions.signOut(); });
-  reconnect.addEventListener('click', () => { void (data?.account?.provider === 'apple' ? actions.authorizeApple() : actions.signIn(data?.account?.provider)); });
   buttons();
   try {
     const response = await fetch('/api/account', { credentials: 'same-origin', headers: { Accept: 'application/json' } });
     if (!response.ok) throw new Error('Account unavailable');
     data = await response.json();
-    find('#account-sign-in').hidden = !!data.account;
     find('#account-settings').hidden = !data.account;
-    if (!data.account) {
-      const unavailable = ['spotify', 'apple'].filter(provider => !data.available?.[provider]);
-      message.textContent = unavailable.length === 2 ? 'Music sign-in is currently unavailable. Try again later.'
-        : unavailable.length ? `${unavailable[0] === 'apple' ? 'Apple Music' : 'Spotify'} sign-in is currently unavailable. Choose the available provider.` : 'Choose your music provider.';
-    } else {
-      const { provider, label, connected } = data.account;
-      const name = provider === 'apple' ? 'Apple Music' : provider === 'spotify' ? 'Spotify' : null;
-      find('#account-label').textContent = label;
-      find('#account-provider').textContent = name ? `${name} · ${connected ? 'Connected' : 'Permission needed'}` : 'Unsupported music provider';
-      message.textContent = !name ? 'This music provider is not supported. Sign out to choose another account.'
-        : !data.available?.[provider] ? `${name} connection is currently unavailable. Try again later.`
-        : connected ? 'Your music account is connected.' : `Connect ${name} to start subscribing.`;
-      reconnect.textContent = provider === 'apple' ? `${connected ? 'Reconnect' : 'Connect'} Apple Music` : 'Reconnect Spotify';
+    const linked = connections();
+    for (const provider of ['apple', 'spotify']) {
+      const account = linked.find(account => account.provider === provider);
+      const card = find(`[data-account-provider="${provider}"]`);
+      card.querySelector('[data-account-label]').textContent = account?.label || '';
+      card.querySelector('[data-account-status]').textContent = account ? account.connected ? 'Connected' : 'Permission needed' : 'Not connected';
+    }
+    const unavailable = ['spotify', 'apple'].filter(provider => !data.available?.[provider]);
+    message.textContent = unavailable.length === 2 ? 'Music connections are currently unavailable. Try again later.'
+      : data.account ? 'Connect both services to keep a separate playlist in each.' : 'Connect Apple Music, Spotify, or both.';
+    if (data.account) {
       const list = find('#account-subscriptions');
       list.replaceChildren();
       for (const subscription of data.subscriptions ?? []) {
         if (!validCapability(subscription.capability)) continue;
+        const account = linked.find(account => account.provider === subscription.provider);
+        if (!account) continue;
+        const name = account.provider === 'apple' ? 'Apple Music' : 'Spotify';
         const item = document.createElement('li');
         const link = document.createElement('a');
         link.href = `/t/${subscription.capability}`;
-        link.textContent = subscription.title || 'Thread';
+        link.textContent = `${subscription.title || 'Thread'} · ${name}`;
         const status = document.createElement('p');
-        status.textContent = subscriptionMessage({ account: data.account, subscription });
+        status.textContent = subscriptionMessage({ account, subscription });
         item.append(link, status);
         const playlist = playlistLink(subscription);
-        if (playlist) { const open = document.createElement('a'); open.href = playlist; open.textContent = 'Open your playlist ↗'; item.append(open); }
+        if (playlist) { const open = document.createElement('a'); open.href = playlist; open.textContent = `Open in ${name} ↗`; item.append(open); }
         list.append(item);
       }
-      if (!list.children.length) { const empty = document.createElement('li'); empty.textContent = 'Open a Thread and subscribe to create your playlist.'; list.append(empty); }
-      if (data.account.browserOnly) {
-        readiness.textContent = 'This Apple Music account is saved in this browser. Use the same browser to return to its playlists.';
-      }
+      if (!list.children.length) { const empty = document.createElement('li'); empty.textContent = 'Open a Thread and subscribe to create your playlists.'; list.append(empty); }
     }
-    if (data.available?.apple && (!data.account || data.account.provider === 'apple')) {
+    if (data.available?.apple) {
       applePreparing = true;
-      const snapshotBinding = data.authorizationBinding;
+      const snapshot = { account: data.account, authorizationBinding: data.authorizationBinding };
       readiness.textContent = 'Getting Apple Music ready…';
-      void waitForAccountMusicKit(window, document).then(MusicKit => data.account
-        ? prepareAccountAppleMusic(snapshotBinding, threadRequest, MusicKit)
-        : prepareBrowserAppleMusic(threadRequest, MusicKit)).then(prepared => {
+      void waitForAccountMusicKit(window, document).then(MusicKit => prepareSettingsAppleMusic(snapshot, threadRequest, MusicKit)).then(prepared => {
         music = prepared.music;
         authorizationBinding = prepared.authorizationBinding;
         applePreparing = false;
-        readiness.textContent = 'Apple Music is ready. Continue to authorize your library. Your account is saved in this browser.';
+        readiness.textContent = data.account?.browserOnly
+          ? 'Apple Music is ready. Your account is saved in this browser; use it to return to your playlists.'
+          : data.account ? 'Apple Music is ready to connect to your account.'
+          : 'Apple Music is ready. Connecting saves your account in this browser.';
         buttons();
       }).catch(() => {
         applePreparing = false;

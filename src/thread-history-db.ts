@@ -17,7 +17,8 @@ export class D1ThreadHistoryStore {
       t.created_at AS createdAt, t.closed_at AS closedAt,
       (SELECT COUNT(*) FROM thread_contributions c WHERE c.thread_id = t.id AND c.removed_at IS NULL) AS songCount
       FROM threads t WHERE EXISTS (SELECT 1 FROM thread_history h WHERE h.thread_id = t.id
-        AND (h.account_id = ? OR h.browser_digest = ?))
+        AND (h.account_id IN (SELECT id FROM accounts WHERE group_id = (SELECT group_id FROM accounts WHERE id = ?))
+          OR h.browser_digest = ?))
       ORDER BY t.created_at DESC, t.id DESC`)
       .bind(owner.accountId, owner.browserDigest).all<ThreadHistoryEntry>();
     return results;

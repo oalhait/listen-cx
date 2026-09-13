@@ -3,6 +3,7 @@ import { ThreadError, type PublicationStatus } from "./thread.js";
 
 export interface Account {
   id: string;
+  groupId: string;
   provider: Provider;
   subject: string;
   label: string;
@@ -19,7 +20,7 @@ export interface Subscription extends PublicationStatus {
 
 type SubscriptionRow = Omit<Subscription, "connected"> & { connected: number };
 
-const accountColumns = "a.id, a.provider, a.provider_subject AS subject, a.label, a.encrypted_credentials AS credentials";
+const accountColumns = "a.id, a.group_id AS groupId, a.provider, a.provider_subject AS subject, a.label, a.encrypted_credentials AS credentials";
 const subscriptionSelect = `SELECT s.account_id AS accountId, t.public_capability AS capability,
   t.title, s.provider, s.publisher_key AS publisherKey, s.connected,
   s.requested_revision AS requestedRevision, s.applied_revision AS appliedRevision, s.status,
@@ -44,6 +45,29 @@ export class D1AccountStore {
   async account(id: string): Promise<Account | null> {
     return this.db.withSession("first-primary").prepare(`SELECT ${accountColumns} FROM accounts a WHERE a.id = ?`)
       .bind(id).first<Account>();
+  }
+
+  async connections(accountId: string): Promise<Account[]> {
+    const { results } = await this.db.withSession("first-primary").prepare(`SELECT ${accountColumns} FROM accounts a
+      WHERE a.group_id = (SELECT group_id FROM accounts WHERE id = ?) ORDER BY a.provider`)
+      .bind(accountId).all<Account>();
+    return results;
+  }
+
+  async linkAccounts(anchorId: string, targetId: string, sessionHash: string): Promise<boolean> {
+    const row = await this.db.withSession("first-primary").prepare(`UPDATE OR IGNORE accounts
+      SET group_id = (SELECT group_id FROM accounts WHERE id = ?)
+      WHERE id = ? AND EXISTS (
+        SELECT 1 FROM accounts anchor JOIN account_sessions s ON s.account_id = anchor.id
+        WHERE anchor.id = ? AND s.token_hash = ? AND s.expires_at > ?
+          AND (accounts.group_id = anchor.group_id OR (
+            NOT EXISTS (SELECT 1 FROM accounts member WHERE member.group_id = accounts.group_id AND member.id != accounts.id)
+            AND NOT EXISTS (SELECT 1 FROM accounts member WHERE member.group_id = anchor.group_id
+              AND member.provider = accounts.provider AND member.id != accounts.id)
+          ))
+      ) RETURNING id`)
+      .bind(anchorId, targetId, anchorId, sessionHash, Date.now()).first<{ id: string }>();
+    return row !== null;
   }
 
   async setCredentials(id: string, credentials: string): Promise<void> {

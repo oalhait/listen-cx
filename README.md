@@ -7,8 +7,8 @@ short URLs are not supported. Apple album URLs must include a track's `?i=` ID.
 
 The recipient page opens the original provider URL and offers a clearly labeled
 search on the other app. No app preference is saved. Threads collect ordered songs
-collaboratively. Sign in from **Account settings** with one music provider, then
-subscribe to Threads to keep personal playlists updated. Account credentials are
+collaboratively. Connect Apple Music, Spotify, or both from **Account settings**, then
+subscribe to Threads separately for each service. Provider credentials are
 encrypted once and shared across that account's subscriptions. Actual provider readback is
 required before a playlist is reported as synced; fixture tests alone do not
 establish live provider behavior.
@@ -164,15 +164,16 @@ All Thread mutations require JSON, a matching `Origin`, and
 | `POST /api/threads/:capability/contributions` | `{url, requestKey, expectedRevision}`; resolves source metadata before committing. |
 | `POST /t/:capability/manage/activate` | Exchanges `{managementCapability}` for a Thread-scoped HttpOnly, SameSite=Strict cookie. HTTPS cookies are Secure. The browser removes the fragment before exchange. |
 | `POST /t/:capability/manage/mutate` | Manager only: `{kind, requestKey, expectedRevision}`, with `id` for `remove`, all active `ids` for `reorder`, or `kind: "close"`. In account mode, legacy `connect` actions return 410. |
-| `GET /settings` | Account onboarding/settings; choose one music provider. The former per-Thread connection page redirects here. |
-| `GET /api/account` | Private account label/provider and this account's subscriptions. Never returns credentials, provider subject, or publisher keys. |
+| `GET /settings` | Account onboarding/settings with independent Apple Music and Spotify connections. The former per-Thread connection page redirects here. |
+| `GET /api/account` | Private connected providers and their subscriptions. Never returns credentials, provider subject, account group IDs, or publisher keys. |
 | `POST /account/:provider/start` | Starts browser-bound sign-in for Spotify or Apple; accepts an optional Thread capability as `returnTo`. |
 | `GET /account/:provider/callback` | Consumes expiring, single-use state and creates an HttpOnly account session after provider identity verification. |
-| `POST /account/apple/token` | Returns a short-lived MusicKit developer token to a signed-in Apple account. |
+| `POST /account/apple/prepare` | Prepares expiring, browser-bound MusicKit onboarding when signed out. |
+| `POST /account/apple/token` | Returns a short-lived MusicKit developer token after validating the signed-in session binding, including when adding Apple Music to Spotify. |
 | `POST /account/apple/authorize` | Verifies MusicKit permission and access to preserved destinations, then encrypts the account's music token. |
 | `POST /account/sign-out` | Revokes the current website session. Existing subscriptions keep syncing. |
-| `GET /api/threads/:capability/subscription` | Returns only the current account's subscription and sync status. |
-| `POST /api/threads/:capability/subscription` | Signed-in account only: `{action: "subscribe" | "retry" | "unsubscribe"}`. Subscribe is idempotent; unsubscribe preserves the provider playlist and destination journal. |
+| `GET /api/threads/:capability/subscription` | Returns each connected provider's subscription and sync status. |
+| `POST /api/threads/:capability/subscription` | Signed-in account only: `{action: "subscribe" | "retry" | "unsubscribe", provider: "apple" | "spotify"}`. Subscribe is idempotent; unsubscribe affects only that provider and preserves its playlist and destination journal. Omitted provider retains the original session provider for older clients. |
 | `POST /t/:capability/manage/identify` | Manager only: `{id, url, confirmed: true, requestKey, expectedRevision}` confirms an immutable counterpart from the other music app after source URL verification. |
 
 Mutation replies distinguish the committed receipt's revision from the current
@@ -203,7 +204,7 @@ snapshot, preserving duplicates and order instead of silently omitting songs.
 
 Publication status includes `connected`, `requestedRevision`, `appliedRevision`,
 `pending | blocked | failed | synced`, `blockedReason`, `failureCode`, and verified
-playlist ID/URL. Each account has one provider and an independent destination per Thread. Migration
+playlist ID/URL. Each connected provider has an independent destination per Thread. Migration
 `0007` queues connected subscribers whenever the Thread revision advances. Subscribing
 does not change the Thread revision or grant management rights. Legacy per-Thread
 Apple connections retain their existing edit restriction; new personal subscriptions
@@ -244,15 +245,25 @@ credentials. It establishes a signed-in browser account only after the backend v
 library permission. A long-lived HttpOnly browser capability identifies this local
 account; a Music User Token is a library grant, never a stable Apple identity. Returning
 in the same browser reuses the account and its playlist journals, even after sign-out.
-Clearing site cookies loses access to that browser account; different browsers create
-separate accounts. Spotify uses its verified provider identity across devices.
+Clearing site cookies loses browser-only access; different browsers create separate
+Apple accounts unless the user signs in through a linked Spotify account. Spotify
+uses its verified provider identity across devices.
+
+Migration `0009` adds account groups, initially placing each existing provider account
+in its own group without replacing identities, credentials, subscription destinations,
+or history. Connecting the second service
+requires its authorization and the initiating website session to remain valid. Each
+group permits one Apple connection and one Spotify connection; an account already
+linked to another group cannot be moved. Signing in through either member restores
+access to the group's connections and history. Connecting a service does not subscribe
+it to existing Threads automatically.
 
 Apple browser grants are expiring and single-use, bound to the browser that prepared
 MusicKit. Sign-out invalidates outstanding onboarding grants and prevents an in-flight
 onboarding request from establishing a session. Existing account reconnects retain the session-bound grant checks.
 The optional Sign in with Apple code path still requires its separate Services ID and
-sign-in key, but those credentials are not required to try Apple Music. An account's
-provider cannot be changed; sign out before trying the other provider.
+sign-in key, but those credentials are not required to try Apple Music. A provider's
+identity cannot be replaced by reconnecting with a different provider account.
 
 The encryption key is base64 encoding of 32 random bytes; preserve it across
 releases. Account credentials are encrypted in D1 with account-specific authenticated

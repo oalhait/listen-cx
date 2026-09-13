@@ -102,3 +102,28 @@ it("rejects a grant prepared before signing into Spotify, and cancels in-flight 
   expect(response.status).toBe(400);
   expect(response.headers.get("set-cookie")).toBeNull();
 });
+
+it("adds Apple Music to a Spotify session and reconnects its same Apple account from that session", async () => {
+  const f = await setup();
+  const spotify = await accounts.upsert("spotify", "both-owner", "Spotify", "spotify-encrypted");
+  const token = "b".repeat(43);
+  await accounts.createSession(spotify.id, await sha256(token), Date.now() + 60000);
+  const cookie = `listen_account=${token}`;
+  const snapshot = await (await f.get(cookie)).json() as { authorizationBinding: string };
+  const prepared = await f.post("/account/apple/token", { authorizationBinding: snapshot.authorizationBinding }, cookie);
+  expect(prepared.status).toBe(200);
+  const browser = cookieOf(prepared, "listen_apple_browser");
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({ data: [{ id: "us" }] }));
+  const result = await f.post("/account/apple/authorize", { authorizationBinding: snapshot.authorizationBinding, musicUserToken: "apple-valid" }, `${cookie}; ${browser}`);
+  expect(result.status).toBe(200);
+  const connections = await accounts.connections(spotify.id);
+  expect(connections).toHaveLength(2);
+  const appleId = connections.find(value => value.provider === "apple")!.id;
+  expect((await accounts.account(spotify.id))?.credentials).toBe("spotify-encrypted");
+  expect(await (await f.get(cookie)).json()).toMatchObject({ connections: expect.arrayContaining([
+    expect.objectContaining({ provider: "apple", connected: true }), expect.objectContaining({ provider: "spotify", connected: true }),
+  ]) });
+  const reconnected = await f.post("/account/apple/authorize", { authorizationBinding: snapshot.authorizationBinding, musicUserToken: "apple-new" }, `${cookie}; ${browser}`);
+  expect(reconnected.status).toBe(200);
+  expect((await accounts.connections(spotify.id)).find(value => value.provider === "apple")?.id).toBe(appleId);
+});

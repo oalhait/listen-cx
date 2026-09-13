@@ -40,7 +40,7 @@ it("keeps account and subscriber data private and requires same-origin signed-in
   expect(changed).toHaveBeenCalledWith(thread.publicCapability);
   const other = await login("apple");
   expect(await (await get(path, other.cookie)).json()).toMatchObject({ subscription: null });
-  expect(await (await get(path)).json()).toEqual({ account: null, subscription: null });
+  expect(await (await get(path)).json()).toEqual({ account: null, connections: [], subscription: null });
   const settings = await get("/api/account", owner.cookie);
   expect(settings.headers.get("cache-control")).toBe("private, no-store");
   const text = await settings.text();
@@ -51,9 +51,9 @@ it("keeps account and subscriber data private and requires same-origin signed-in
   expect((await accounts.subscription(owner.account.id, thread.publicCapability))?.connected).toBe(true);
 });
 
-it("requires music permission after Apple sign-in and refuses attaching a second provider", async () => {
+it("requires music permission while allowing an Apple account to begin connecting Spotify", async () => {
   const apple = await login("apple");
-  expect((await post("/account/spotify/start", {}, apple.cookie)).status).toBe(409);
+  expect((await post("/account/spotify/start", {}, apple.cookie)).status).toBe(200);
   const thread = await new D1ThreadStore(env.DB).create("Pending permission", crypto.randomUUID().replaceAll("-", "").slice(0, 22));
   expect((await post(`/api/threads/${thread.publicCapability}/subscription`, { action: "subscribe" }, apple.cookie)).status).toBe(403);
   const spotify = await login("spotify");
@@ -160,4 +160,53 @@ it("cannot recreate a session when sign-out finishes during reconnect credential
   expect(callback.headers.get("location")).toBe("/settings?sign_in=failed");
   expect(callback.headers.get("set-cookie")).toBeNull();
   expect(await (await get("/api/account", owner.cookie)).json()).toMatchObject({ account: null });
+});
+
+it("links Spotify to an Apple session and keeps both subscriptions independently addressable", async () => {
+  const owner = await login("apple", "browser:original", "apple-encrypted");
+  const thread = await new D1ThreadStore(env.DB).create("Both libraries", "d".repeat(22));
+  const original = await accounts.subscribe(owner.account.id, thread.publicCapability);
+  const started = await post("/account/spotify/start", {}, owner.cookie);
+  const { url } = await started.json() as { url: string };
+  const browser = started.headers.getSetCookie()[0]!.split(";")[0]!;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async input => String(input).includes("/api/token")
+    ? Response.json({ access_token: "access", refresh_token: "refresh", expires_in: 3600, token_type: "Bearer" })
+    : Response.json({ id: "linked-spotify" }));
+  const callback = await get(`/account/spotify/callback?state=${encodeURIComponent(new URL(url).searchParams.get("state")!)}&code=code`, `${owner.cookie}; ${browser}`);
+  expect(callback.headers.get("location")).toBe("/settings");
+  const cookie = callback.headers.getSetCookie().find(value => value.startsWith("listen_account="))!.split(";")[0]!;
+  const settings = await (await get("/api/account", cookie)).json() as { connections: { provider: string; connected: boolean }[] };
+  expect(settings.connections).toEqual(expect.arrayContaining([
+    expect.objectContaining({ provider: "apple", connected: true }), expect.objectContaining({ provider: "spotify", connected: true }),
+  ]));
+  expect(settings.connections).toHaveLength(2);
+  expect((await accounts.subscription(owner.account.id, thread.publicCapability))?.publisherKey).toBe(original.publisherKey);
+  const path = `/api/threads/${thread.publicCapability}/subscription`;
+  expect((await post(path, { action: "subscribe", provider: "spotify" }, cookie)).status).toBe(200);
+  expect((await post(path, { action: "unsubscribe", provider: "apple" }, cookie)).status).toBe(200);
+  const status = await (await get(path, cookie)).json() as { connections: { account: { provider: string }; subscription: { connected: boolean } }[] };
+  expect(status.connections.find(value => value.account.provider === "apple")?.subscription.connected).toBe(false);
+  expect(status.connections.find(value => value.account.provider === "spotify")?.subscription.connected).toBe(true);
+  expect((await post(path, { action: "subscribe", provider: "unknown" }, cookie)).status).toBe(400);
+  const outsider = await login("apple");
+  expect((await post(path, { action: "unsubscribe", provider: "spotify" }, outsider.cookie)).status).toBe(403);
+});
+
+it("does not link a second provider after the initiating session signs out during token storage", async () => {
+  const owner = await login("apple", "browser:logout-test", "apple-encrypted");
+  const started = await post("/account/spotify/start", {}, owner.cookie);
+  const { url } = await started.json() as { url: string };
+  const browser = started.headers.getSetCookie()[0]!.split(";")[0]!;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async input => String(input).includes("/api/token")
+    ? Response.json({ access_token: "access", refresh_token: "refresh", expires_in: 3600, token_type: "Bearer" })
+    : Response.json({ id: "not-linked" }));
+  const original = accounts.setCredentials.bind(accounts);
+  vi.spyOn(accounts, "setCredentials").mockImplementation(async (id, value) => {
+    await post("/account/sign-out", {}, owner.cookie);
+    await original(id, value);
+  });
+  const callback = await get(`/account/spotify/callback?state=${encodeURIComponent(new URL(url).searchParams.get("state")!)}&code=code`, `${owner.cookie}; ${browser}`);
+  expect(callback.headers.get("location")).toBe("/settings?sign_in=failed");
+  expect(callback.headers.get("set-cookie")).toBeNull();
+  expect(await accounts.connections(owner.account.id)).toHaveLength(1);
 });

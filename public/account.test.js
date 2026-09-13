@@ -1,5 +1,6 @@
+import { accountPage } from '../src/account-page.ts';
 import { expect, it, vi } from 'vitest';
-import { accountReturn, createAccountActions, prepareAccountAppleMusic, prepareBrowserAppleMusic, waitForAccountMusicKit } from './account.js';
+import { accountReturn, mountAccount, createAccountActions, prepareAccountAppleMusic, prepareBrowserAppleMusic, prepareSettingsAppleMusic, waitForAccountMusicKit } from './account.js';
 
 function setup(overrides = {}) {
   const request = vi.fn().mockResolvedValue({});
@@ -149,4 +150,75 @@ it('prepares anonymous Apple Music with a browser binding before the user gestur
   expect(request).toHaveBeenCalledExactlyOnceWith('/account/apple/prepare', {});
   expect(MusicKit.configure).toHaveBeenCalledWith(expect.objectContaining({ developerToken: 'app-jwt' }));
   await expect(prepareBrowserAppleMusic(async () => ({ developerToken: 'app-jwt' }), MusicKit)).rejects.toThrow('Browser preparation expired');
+});
+
+
+it('prepares Apple Music against the signed-in account even when Spotify is the first connection', async () => {
+  const MusicKit = { configure: vi.fn(), getInstance: () => ({}) };
+  const request = vi.fn().mockResolvedValue({ developerToken: 'developer-token', authorizationBinding: 'group-session' });
+  await prepareSettingsAppleMusic({ account: { provider: 'spotify' }, authorizationBinding: 'group-session' }, request, MusicKit);
+  expect(request).toHaveBeenCalledExactlyOnceWith('/account/apple/token', { authorizationBinding: 'group-session' });
+});
+
+it('prepares a browser account only when signed out', async () => {
+  const MusicKit = { configure: vi.fn(), getInstance: () => ({}) };
+  const request = vi.fn().mockResolvedValue({ developerToken: 'developer-token', authorizationBinding: 'browser-session' });
+  await prepareSettingsAppleMusic({ account: null, authorizationBinding: null }, request, MusicKit);
+  expect(request).toHaveBeenCalledExactlyOnceWith('/account/apple/prepare', {});
+});
+
+
+it('renders both provider connection cards and one sign-out control', () => {
+  const page = accountPage();
+  expect(page).toContain('data-account-provider="apple"');
+  expect(page).toContain('data-account-provider="spotify"');
+  expect(page.match(/id="account-sign-out"/g)).toHaveLength(1);
+  expect(page).not.toContain('Choose one music provider');
+});
+
+it.each([false, true])('keeps Apple authorization available alongside Spotify (Apple linked: %s)', async appleLinked => {
+  const element = () => ({ dataset: {}, children: [], events: {}, selectors: {}, textContent: '',
+    setAttribute: vi.fn(), after: vi.fn(),
+    append(...children) { this.children.push(...children); },
+    replaceChildren(...children) { this.children = children; },
+    addEventListener(name, handler) { this.events[name] = handler; },
+    querySelector(selector) { return this.selectors[selector]; },
+  });
+  const root = element();
+  for (const id of ['account-message', 'apple-readiness', 'account-return', 'account-settings', 'account-sign-out', 'account-subscriptions']) root.selectors[`#${id}`] = element();
+  const buttons = ['apple', 'spotify'].map(provider => {
+    const card = element();
+    card.selectors['[data-account-label]'] = element();
+    card.selectors['[data-account-status]'] = element();
+    root.selectors[`[data-account-provider="${provider}"]`] = card;
+    const button = element();
+    button.dataset.signIn = provider;
+    return button;
+  });
+  root.querySelectorAll = () => buttons;
+  const spotify = { provider: 'spotify', connected: true, label: 'Spotify listener' };
+  const apple = { provider: 'apple', connected: true, label: 'Apple listener' };
+  const connections = appleLinked ? [spotify, apple] : [spotify];
+  const data = { account: spotify, connections, available: { apple: true, spotify: true }, authorizationBinding: 'group-session',
+    subscriptions: connections.map(account => ({ provider: account.provider, capability: 'a'.repeat(22), title: 'Road trip', connected: true, status: 'pending' })) };
+  const music = { authorize: vi.fn().mockResolvedValue('music-user-token') };
+  const fetcher = vi.fn(async path => ({ ok: true, json: async () => path === '/api/account' ? data
+    : { developerToken: 'developer-token', authorizationBinding: 'group-session' } }));
+  vi.stubGlobal('document', { createElement: element });
+  vi.stubGlobal('window', { location: { search: '', reload: vi.fn() }, MusicKit: { configure: vi.fn(), getInstance: () => music } });
+  vi.stubGlobal('fetch', fetcher);
+  try {
+    await mountAccount(root);
+    await vi.waitFor(() => expect(buttons[0].disabled).toBe(false));
+    expect(buttons[0].textContent).toBe(`${appleLinked ? 'Reconnect' : 'Connect'} Apple Music ↗`);
+    expect(buttons[1].textContent).toBe('Reconnect Spotify ↗');
+    expect(root.selectors['[data-account-provider="spotify"]'].selectors['[data-account-status]'].textContent).toBe('Connected');
+    const titles = root.selectors['#account-subscriptions'].children.map(item => item.children[0].textContent);
+    expect(titles).toContain('Road trip · Spotify');
+    if (appleLinked) expect(titles).toContain('Road trip · Apple Music');
+    expect(fetcher).toHaveBeenCalledWith('/account/apple/token', expect.objectContaining({ body: JSON.stringify({ authorizationBinding: 'group-session' }) }));
+    buttons[0].events.click();
+    expect(music.authorize).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(window.location.reload).toHaveBeenCalledTimes(1));
+  } finally { vi.unstubAllGlobals(); }
 });

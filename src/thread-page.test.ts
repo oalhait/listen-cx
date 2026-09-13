@@ -91,6 +91,9 @@ it("offers explicit counterpart confirmation to managers when a connected app is
   const page = threadPage(connected, true);
   expect(page).toContain('data-identify="1"');
   expect(page).toContain("same recording");
+  expect(page).toContain("Add Apple Music link");
+  expect(page).toContain("only needed to sync this song to Apple Music");
+  expect(page).not.toContain("Confirm Apple Music version");
   expect(page).toContain('type="checkbox"');
   expect(page).not.toContain('data-remove="1"');
   expect(threadPage(connected, false)).not.toContain('data-identify=');
@@ -106,6 +109,9 @@ it("keeps sync retry available to a manager after closure", () => {
 it("shows a personal subscription and account settings instead of shared provider connections", () => {
   const page = threadPage(view, true, ["apple", "spotify"], true);
   expect(page).toContain('id="personal-subscription"');
+  expect(page).toContain('data-subscription-provider="apple"');
+  expect(page).toContain('data-subscription-provider="spotify"');
+  expect(page).toContain('Your playlists');
   expect(page).toContain('src="/subscription.js"');
   expect(page).toContain('/settings?thread=');
   expect(page).not.toContain('/manage/apps');
