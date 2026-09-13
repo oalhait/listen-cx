@@ -74,7 +74,10 @@ describe("Thread HTTP contract", () => {
     const page = await app.request(`${baseUrl}/t/${cap}`);
     expect(page.status).toBe(200);
     expect(page.headers.get("Content-Security-Policy")).toContain("frame-ancestors 'none'");
-    expect(await page.text()).not.toContain(creationKey);
+    const html = await page.text();
+    expect(html).not.toContain(creationKey);
+    expect(html).toContain('<meta property="og:title" content="Road trip — a music Thread">');
+    expect(html).toContain(`<meta property="og:url" content="${baseUrl}/t/${cap}">`);
     expect((await post(`/t/${cap}/manage/activate`, { managementCapability: cap })).status).toBe(403);
     const response = await post(`/t/${cap}/manage/activate`, { managementCapability: creationKey });
     expect(response.status).toBe(200);

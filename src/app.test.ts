@@ -48,7 +48,10 @@ describe("short-link API", () => {
     const response = await app.request(`/${row.slug}`, { headers: { Accept: "text/html" } });
     expect(response.headers.get("content-type")).toContain("text/html");
     expect(response.headers.get("Vary")).toBe("Accept");
-    expect(await response.text()).toContain("Open in Spotify");
+    const html = await response.text();
+    expect(html).toContain("Open in Spotify");
+    expect(html).toContain('<meta property="og:title" content="Cataracts — Freddie Gibbs, Madlib">');
+    expect(html).toContain(`<meta property="og:url" content="https://listen.test/${row.slug}">`);
     expect(resolve).not.toHaveBeenCalled();
   });
 

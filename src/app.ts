@@ -118,11 +118,11 @@ export function createApp({ resolver, store, jamStore, jamsEnabled = false, base
     const html = prefersHtml(c.req.header("Accept") ?? null);
     const slug = c.req.param("slug");
     if (!LINK_SLUG_PATTERN.test(slug)) {
-      return html ? c.html(renderRecipient(null), 404) : c.json({ error: "Not found." }, 404);
+      return html ? c.html(renderRecipient(null, baseUrl), 404) : c.json({ error: "Not found." }, 404);
     }
     const row = await store.get(slug);
-    if (!row) return html ? c.html(renderRecipient(null), 404) : c.json({ error: "Not found." }, 404);
-    return html ? c.html(renderRecipient(row)) : c.json(row);
+    if (!row) return html ? c.html(renderRecipient(null, baseUrl), 404) : c.json({ error: "Not found." }, 404);
+    return html ? c.html(renderRecipient(row, baseUrl)) : c.json(row);
   });
 
   return app;

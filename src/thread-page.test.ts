@@ -6,12 +6,26 @@ const view: ThreadView = { publicCapability: "abcdefghijklmnopqrstuv", title: '<
   { id: 1, title: "Song <one>", artist: "Artist", linkSlug: "2345678", artworkUrl: "javascript:alert(1)", source: { provider: "spotify", id: "4SN5Kkig8iJ8vdwsOoP7IO", storefront: "us", verified: true } },
 ], publications: [{ provider: "apple", connected: false, requestedRevision: 2, appliedRevision: null, verifiedPlaylistId: null, verifiedPlaylistUrl: null, status: "blocked", blockedReason: "apple_sync_unavailable", failureCode: null }] };
 it("escapes Thread metadata and keeps scripts external", () => {
-  const page = threadPage(view, false);
+  const page = threadPage(view, false, [], false, "https://listen.test");
   expect(page).toContain("&lt;script&gt;");
   expect(page).not.toContain('<script>alert');
   expect(page).not.toContain("javascript:");
   expect(page).toContain('src="/thread-page.js"');
   expect(page).toContain('href="/2345678"');
+});
+it("publishes a Thread preview using its first safe artwork and song count", () => {
+  const page = threadPage({ ...view, title: "Late night drives", contributions: [
+    { ...view.contributions[0]!, artworkUrl: "https://images.example/cover.jpg?a=1&b=2" },
+    { ...view.contributions[0]!, id: 2, title: "Second song" },
+  ] }, false, [], false, "https://listen.test");
+  expect(page).toContain('<meta property="og:type" content="website">');
+  expect(page).toContain('<meta property="og:title" content="Late night drives — a music Thread">');
+  expect(page).toContain('<meta property="og:description" content="2 songs, collected together. Listen or add yours on listen.cx.">');
+  expect(page).toContain(`<meta property="og:url" content="https://listen.test/t/${view.publicCapability}">`);
+  expect(page).toContain('<meta property="og:image" content="https://images.example/cover.jpg?a=1&amp;b=2">');
+  expect(page).toContain('<meta property="og:image:alt" content="Artwork for Song &lt;one&gt; by Artist">');
+  expect(page).toContain('<meta name="twitter:card" content="summary">');
+  expect(page).toContain(`<link rel="canonical" href="https://listen.test/t/${view.publicCapability}">`);
 });
 it("shows management controls only to managers and locks closed Threads", () => {
   expect(threadPage(view, false)).not.toContain('id="close-thread"');

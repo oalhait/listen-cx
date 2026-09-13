@@ -73,10 +73,10 @@ export function createThreadApp({ resolver, store, baseUrl, publishing, history,
   app.get("/t/:capability", async c => {
     const capability = c.req.param("capability");
     const thread = await store.get(capability);
-    if (!thread) return c.html(threadPage(null, false), 404);
+    if (!thread) return c.html(threadPage(null, false, [], false, baseUrl), 404);
     const managed = Boolean(await authorization(c, capability));
     if (managed) await history?.remember(c, capability);
-    return c.html(threadPage(thread, managed, publishing?.availableProviders, publishing?.accountSubscriptions));
+    return c.html(threadPage(thread, managed, publishing?.availableProviders, publishing?.accountSubscriptions, baseUrl));
   });
   app.post("/api/threads/:capability/contributions", async c => {
     const capability = c.req.param("capability");
