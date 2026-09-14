@@ -115,19 +115,28 @@ it("migrates existing Apple subscribers away from personal playlist destinations
 
   const migration = env.TEST_MIGRATIONS.find(value => value.name.includes("0014"))!;
   expect(migration).toBeDefined();
-  await env.DB.batch(migration.queries.slice(1).map(query => env.DB.prepare(query)));
+  await env.DB.batch(migration.queries.slice(2).map(query => env.DB.prepare(query)));
 
   expect(await new D1PublicationStore(env.DB).canonical(thread.publicCapability, "apple")).toMatchObject({
-    connected: true, status: "pending", verifiedPlaylistId: "p.owner",
+    connected: false, status: "blocked", verifiedPlaylistId: "p.owner",
   });
-  expect((await new D1PublicationStore(env.DB).target(
+  const publications = new D1PublicationStore(env.DB);
+  expect((await publications.target(
     (await env.DB.prepare(`SELECT publisher_key FROM thread_publications WHERE provider = 'apple'
-      AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`).bind(thread.publicCapability).first<string>("publisher_key"))!,
+      AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`).bind(thread.publicCapability).first<string>("publisher_key"))!, true,
   ))).toMatchObject({ serviceOwned: true });
   expect(await accounts.subscription(account.id, thread.publicCapability)).toMatchObject({
-    connected: true, status: "pending", appliedRevision: 0,
+    connected: true, status: "blocked", blockedReason: "service_migration_pending", appliedRevision: 0,
     verifiedPlaylistId: "p.personal", verifiedPlaylistUrl: "https://music.apple.com/us/playlist/personal/pl.personal",
   });
+  expect((await new D1ThreadStore(env.DB).get(thread.publicCapability))!.publications.find(row => row.provider === "apple"))
+    .toMatchObject({ editLocked: true });
+  expect(await publications.due(thread.publicCapability)).toEqual([]);
+
+  await publications.activateAppleServicePublications(thread.publicCapability);
+
+  expect(await publications.canonical(thread.publicCapability, "apple")).toMatchObject({ connected: true, status: "pending" });
+  expect(await accounts.subscription(account.id, thread.publicCapability)).toMatchObject({ status: "pending", blockedReason: null });
 });
 
 it("does not let repeated Apple subscribe clear a shared publication block", async () => {

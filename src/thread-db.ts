@@ -106,6 +106,7 @@ export class D1ThreadStore {
         'failureCode', p.failure_code, 'verifiedPlaylistId', p.verified_playlist_id,
         'connected', json(CASE p.connected WHEN 1 THEN 'true' ELSE 'false' END),
         'serviceOwned', json(CASE p.service_owned WHEN 1 THEN 'true' ELSE 'false' END),
+        'editLocked', json(CASE p.edit_locked WHEN 1 THEN 'true' ELSE 'false' END),
         'verifiedPlaylistUrl', p.verified_playlist_url))
        FROM thread_publications p WHERE p.thread_id = t.id) AS publications
       FROM threads t WHERE t.public_capability = ?`).bind(capability).first<SnapshotRow>();
@@ -225,6 +226,7 @@ export class D1ThreadStore {
         WHERE c.id = ? AND t.public_capability = ? AND t.mutation_token = ?`)
         .bind(request.identity.provider, request.identity.id, request.identity.storefront, request.id, capability, token)];
       if (request.kind === "connect") return [db.prepare(`UPDATE thread_publications SET connected = 1,
+        edit_locked = CASE WHEN provider = 'apple' THEN 1 ELSE edit_locked END,
         status = 'pending', blocked_reason = NULL, failure_code = NULL, next_attempt_at = 0
         WHERE provider = ? AND thread_id = (SELECT id FROM threads WHERE public_capability = ? AND mutation_token = ?)`)
         .bind(request.provider, capability, token)];
@@ -256,7 +258,7 @@ export class D1ThreadStore {
       throw new ThreadError(409, "stale_revision", "The Thread changed. Refresh and try again.");
     }
     if ((intent.kind === "remove" || intent.kind === "reorder")
-      && view.publications.some(p => p.provider === "apple" && p.connected && !p.serviceOwned)) {
+      && view.publications.some(p => p.provider === "apple" && p.connected && p.editLocked)) {
       throw new ThreadError(409, "apple_append_only", "Apple Music supports additions only. Remove and reorder are unavailable for this Thread.");
     }
     if (intent.kind === "connect" && view.publications.some(p => p.provider === intent.provider && p.connected)) {
@@ -289,7 +291,7 @@ export class D1ThreadStore {
     const token = nanoid(22);
     const addCondition = intent.kind === "add" ? `AND (SELECT COUNT(*) FROM thread_contributions WHERE thread_id = threads.id) < ${THREAD_TOTAL_LIMIT}` : "";
     const editCondition = intent.kind === "remove" || intent.kind === "reorder"
-      ? "AND NOT EXISTS (SELECT 1 FROM thread_publications WHERE thread_id = threads.id AND provider = 'apple' AND connected = 1 AND service_owned = 0)" : "";
+      ? "AND NOT EXISTS (SELECT 1 FROM thread_publications WHERE thread_id = threads.id AND provider = 'apple' AND connected = 1 AND edit_locked = 1)" : "";
     const identityCondition = intent.kind === "identify" ? `AND EXISTS (
       SELECT 1 FROM thread_contributions c WHERE c.id = ? AND c.thread_id = threads.id
       AND c.removed_at IS NULL AND c.source_verified = 1 AND c.source_provider != ?

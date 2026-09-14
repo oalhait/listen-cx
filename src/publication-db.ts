@@ -33,6 +33,24 @@ export function isPlaylistUrl(provider: Provider, id: string, value: string): bo
 export class D1PublicationStore {
   constructor(private readonly db: D1Database) {}
 
+  async activateAppleServicePublications(capability?: string): Promise<void> {
+    const db = this.db.withSession("first-primary");
+    await db.batch([
+      db.prepare(`UPDATE thread_publications SET connected = 1, status = 'pending', blocked_reason = NULL,
+        failure_code = NULL, next_attempt_at = 0 WHERE provider = 'apple' AND service_owned = 1 AND connected = 0
+        AND (? IS NULL OR thread_id = (SELECT id FROM threads WHERE public_capability = ?))
+        AND EXISTS (SELECT 1 FROM thread_subscriptions subscription WHERE subscription.thread_id = thread_publications.thread_id
+          AND subscription.provider = 'apple' AND subscription.connected = 1)`)
+        .bind(capability ?? null, capability ?? null),
+      db.prepare(`UPDATE thread_subscriptions SET status = 'pending', blocked_reason = NULL, failure_code = NULL, next_attempt_at = 0
+        WHERE provider = 'apple' AND connected = 1 AND blocked_reason = 'service_migration_pending'
+        AND (? IS NULL OR thread_id = (SELECT id FROM threads WHERE public_capability = ?))
+        AND EXISTS (SELECT 1 FROM thread_publications service WHERE service.thread_id = thread_subscriptions.thread_id
+          AND service.provider = 'apple' AND service.service_owned = 1 AND service.connected = 1)`)
+        .bind(capability ?? null, capability ?? null),
+    ]);
+  }
+
   async retry(authorization: ManagementAuthorization, provider: Provider): Promise<void> {
     if (!isManagementAuthorization(authorization)) throw new ThreadError(403, "forbidden", "Management access required.");
     const db = this.db.withSession("first-primary");
@@ -44,12 +62,12 @@ export class D1PublicationStore {
         WHERE provider = ? AND connected = 1 AND status != 'synced'
         AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
         .bind(provider, authorization.publicCapability),
-      db.prepare(`UPDATE thread_subscriptions SET status = 'pending', blocked_reason = NULL, failure_code = NULL
-        WHERE provider = 'apple' AND connected = 1
-        AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)
-        AND EXISTS (SELECT 1 FROM thread_publications service WHERE service.thread_id = thread_subscriptions.thread_id
-          AND service.provider = 'apple' AND service.service_owned = 1)`)
-        .bind(authorization.publicCapability),
+      ...(provider === "apple" ? [db.prepare(`UPDATE thread_subscriptions SET status = 'pending', blocked_reason = NULL, failure_code = NULL
+          WHERE provider = 'apple' AND connected = 1
+          AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)
+          AND EXISTS (SELECT 1 FROM thread_publications service WHERE service.thread_id = thread_subscriptions.thread_id
+            AND service.provider = 'apple' AND service.service_owned = 1)`)
+        .bind(authorization.publicCapability)] : []),
     ]);
   }
 

@@ -74,7 +74,7 @@ function publicationCard(publication: PublicationStatus, canRetry: boolean): str
 export function threadPage(view: ThreadView | null, managed: boolean, availableProviders: Provider[] = [], accountSubscriptions = false, baseUrl = "https://listen.cx"): string {
   if (!view) return shell("Thread not found", '<main class="thread-shell"><h1>Thread not found</h1><p>Check the sharing link and try again.</p><a class="text-button" href="/threads/new">Start a new Thread ↗</a></main>');
   const open = view.closedAt === null;
-  const appleConnected = view.publications.some(publication => publication.provider === "apple" && publication.connected && !publication.serviceOwned);
+  const appleConnected = view.publications.some(publication => publication.provider === "apple" && publication.connected && publication.editLocked);
   const previewSong = view.contributions.find(song => safeArtwork(song.artworkUrl));
   const count = view.contributions.length;
   const metadata = socialMetadata({

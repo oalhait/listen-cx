@@ -59,7 +59,7 @@ it("links managers to account connections even when providers are unavailable", 
 });
 
 it("hides removal and ordering after Apple connects while preserving additions and close", () => {
-  const page = threadPage({ ...view, publications: view.publications.map(p => ({ ...p, connected: true })) }, true);
+  const page = threadPage({ ...view, publications: view.publications.map(p => ({ ...p, connected: true, editLocked: true })) }, true);
   expect(page).not.toContain('data-remove=');
   expect(page).not.toContain('data-move=');
   expect(page).toContain('id="add-song-form"');

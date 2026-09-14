@@ -43,6 +43,7 @@ export interface PublicationStatus {
   provider: Provider;
   connected: boolean;
   serviceOwned?: boolean;
+  editLocked?: boolean;
   requestedRevision: number;
   appliedRevision: number | null;
   status: "pending" | "blocked" | "failed" | "synced";

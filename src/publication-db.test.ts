@@ -93,3 +93,23 @@ it("propagates a shared Apple publication block to listeners and resets both on 
   expect(await publications.canonical(view.publicCapability, "apple")).toMatchObject({ status: "pending" });
   expect(await accounts.subscription(account.id, view.publicCapability)).toMatchObject({ status: "pending", blockedReason: null });
 });
+
+it("does not reset Apple listeners when a manager retries Spotify", async () => {
+  const threads = new D1ThreadStore(env.DB);
+  const publications = new D1PublicationStore(env.DB);
+  const accounts = new D1AccountStore(env.DB);
+  const secret = nanoid(22);
+  const view = await threads.create("Provider-specific retry", secret);
+  const auth = (await authorizeManagementCapability(threads, view.publicCapability, secret))!;
+  const account = await accounts.upsert("apple", "provider-specific-listener", "Listener");
+  const subscription = await accounts.subscribe(account.id, view.publicCapability);
+  await threads.manage(auth, { kind: "connect", provider: "spotify", expectedRevision: 0, requestKey: "connect" });
+  await env.DB.prepare(`UPDATE thread_subscriptions SET status = 'blocked', blocked_reason = 'publisher_not_authorized'
+    WHERE publisher_key = ?`).bind(subscription.publisherKey).run();
+
+  await publications.retry(auth, "spotify");
+
+  expect(await accounts.subscription(account.id, view.publicCapability)).toMatchObject({
+    status: "blocked", blockedReason: "publisher_not_authorized",
+  });
+});

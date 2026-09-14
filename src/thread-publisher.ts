@@ -25,7 +25,9 @@ const encode = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes));
 const decode = (value: string) => Uint8Array.from(atob(value), character => character.charCodeAt(0));
 
 export async function wakeDue(env: RuntimeEnv, capability?: string): Promise<void> {
-  const targets = await new D1PublicationStore(env.DB).due(capability);
+  const publications = new D1PublicationStore(env.DB);
+  if (availablePublishers(env).includes("apple")) await publications.activateAppleServicePublications(capability);
+  const targets = await publications.due(capability);
   const results = await Promise.allSettled(targets.map(target => env.THREAD_PUBLISHER.getByName(target.publisherKey).wake(target.publisherKey)));
   if (results.some(result => result.status === "rejected")) throw new Error("publisher_wake_failed");
 }
