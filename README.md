@@ -266,7 +266,7 @@ and Apple catalog search. No contributor is required to connect both services.
 Publication status includes `connected`, `requestedRevision`, `appliedRevision`,
 `pending | blocked | failed | synced`, `blockedReason`, `failureCode`, and verified
 playlist ID/URL. Migration `0007` queues connected subscribers whenever the Thread
-revision advances. Migration `0014` changes Apple account subscriptions to reference
+revision advances. Migration `0017` changes Apple account subscriptions to reference
 one service-owned playlist per Thread. Apple listener rows record the listener's
 verified library relationship, not a separately created playlist. Spotify account
 subscriptions continue to use independent personal destinations. Subscribing does
@@ -376,7 +376,7 @@ Enabling publishing in production requires the Spotify redirect URI
 app and the provider secrets above. Deploying the current Worker requires all D1
 migrations through `0017_service_owned_apple_playlists.sql` first.
 Migration `0013` preserves catalog rate-limit deadlines across Thread edits and retries.
-Migration `0014` does not delete old personal Apple playlists; listeners may remove
+Migration `0017` does not delete old personal Apple playlists; listeners may remove
 those stale copies themselves after confirming the shared playlist is present. A
 Thread with an existing Apple subscriber transitions its legacy publishing target to
 service ownership, so the old owner-created playlist remains but stops receiving
