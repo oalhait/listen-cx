@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { nanoid } from "nanoid";
 import { expect, it } from "vitest";
 import { D1AccountStore } from "./account-db.js";
+import { D1PublicationStore } from "./publication-db.js";
 import { D1ThreadStore } from "./thread-db.js";
 
 it("keeps provider accounts separate and preserves credentials unless explicitly replaced", async () => {
@@ -59,6 +60,20 @@ it("creates independent subscriber destinations without changing the collaborati
   expect((await threads.get(thread.publicCapability))!.revision).toBe(0);
   expect(await store.subscription("missing", thread.publicCapability)).toBeNull();
   await expect(store.subscribe(first.id, nanoid(22))).rejects.toMatchObject({ code: "not_found" });
+});
+
+it("queues one service-owned Apple publication before listener library subscriptions", async () => {
+  const accounts = new D1AccountStore(env.DB);
+  const thread = await new D1ThreadStore(env.DB).create("Together", nanoid(22));
+  const first = await accounts.upsert("apple", "first-apple-listener", "First");
+  const second = await accounts.upsert("apple", "second-apple-listener", "Second");
+  await accounts.subscribe(first.id, thread.publicCapability);
+  await accounts.subscribe(second.id, thread.publicCapability);
+
+  const targets = (await new D1PublicationStore(env.DB).due(thread.publicCapability))
+    .filter(target => target.provider === "apple");
+  expect(targets).toHaveLength(1);
+  expect(targets[0]).toMatchObject({ accountId: null, provider: "apple", status: "pending" });
 });
 
 it("queues connected subscribers on revisions and reuses a disconnected destination when resubscribed", async () => {
