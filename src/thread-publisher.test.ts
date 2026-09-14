@@ -57,7 +57,6 @@ it("persists a wake without provider work and blocks missing credentials when th
   expect(await runDurableObjectAlarm(f.stub)).toBe(true);
   expect((await f.threads.get(f.cap))!.publications.find(p => p.provider === "spotify")).toMatchObject({ status: "blocked", blockedReason: "publisher_not_authorized" });
 });
-
 it("rejects destination key mismatches and credential access from playlist objects", async () => {
   const f = await setup();
   await runInDurableObject(f.stub, async instance => {
@@ -210,13 +209,18 @@ it("repairs drift after an adapter checkpoint without creating a second Spotify 
 
 it("publishes Apple only after the provider returns a public URL and exact catalog track readback", async () => {
   const f = await setup("apple");
-  await configure(f.stub, { APPLE_PUBLISHING_ENABLED: "true", APPLE_DEVELOPER_TOKEN: "private-developer", APPLE_MUSIC_USER_TOKEN: "private-user" });
+  await env.DB.prepare(`UPDATE thread_publications SET service_owned = 1 WHERE provider = 'apple'
+    AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`).bind(f.cap).run();
+  await configure(f.stub, { ...await applePublishingSecrets(), APPLE_MUSIC_USER_TOKEN: "private-user" });
   let marker = "";
   let reads = 0;
+  const developerTokens = new Set<string>();
   vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
     const url = new URL(input);
     expect(url.hostname).toBe("api.music.apple.com");
-    expect(new Headers(init?.headers).get("Music-User-Token")).toBe("private-user");
+    const headers = new Headers(init?.headers);
+    expect(headers.get("Music-User-Token")).toBe("private-user");
+    developerTokens.add(headers.get("Authorization")!);
     if (url.pathname === "/v1/me/library/playlists") {
       expect(init?.method).toBe("POST");
       const body = JSON.parse(String(init?.body));
@@ -235,9 +239,173 @@ it("publishes Apple only after the provider returns a public URL and exact catal
   await runDurableObjectAlarm(f.stub);
   expect((await f.threads.get(f.cap))!.publications.find(p => p.provider === "apple")).toMatchObject({ status: "synced", appliedRevision: 1, verifiedPlaylistUrl: "https://music.apple.com/us/playlist/pl.public" });
   expect(reads).toBe(2);
+  expect([...developerTokens]).toHaveLength(1);
+  expect([...developerTokens][0]).toMatch(/^Bearer ey/);
   await runInDurableObject(f.stub, async (_, state) => {
-    expect(JSON.stringify([...await state.storage.list()])).not.toMatch(/private-developer|private-user/);
+    const stored = JSON.stringify([...await state.storage.list()]);
+    expect(stored).toContain("apple-service:");
+    expect(stored).not.toContain("private-user");
   });
+});
+
+it("adds the service-owned Apple playlist to a listener library without creating a personal copy", async () => {
+  const threads = new D1ThreadStore(env.DB);
+  const view = await threads.create("Shared Apple playlist", nanoid(22));
+  await threads.add(view.publicCapability, {
+    expectedRevision: 0,
+    requestKey: "apple-song",
+    source: { provider: "apple", id: "123456", storefront: "us" },
+    track: { title: "Song", artist: "Artist", isrc: null, artworkUrl: null, complete: false,
+      spotifyUrl: null, appleUrl: "https://music.apple.com/us/song/123456" },
+  });
+  const canonicalUrl = "https://music.apple.com/us/playlist/shared/pl.service";
+  await env.DB.prepare(`UPDATE thread_publications SET connected = 1, service_owned = 1, status = 'synced', blocked_reason = NULL,
+    applied_revision = requested_revision, verified_playlist_id = 'p.service', verified_playlist_url = ?
+    WHERE provider = 'apple' AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
+    .bind(canonicalUrl, view.publicCapability).run();
+
+  const accounts = new D1AccountStore(env.DB);
+  const account = await accountFixture("apple", { teamId: "TEAM123456", musicUserToken: "apple-listener", storefront: "us" });
+  const subscription = await accounts.subscribe(account.accountId, view.publicCapability);
+  const destination = env.THREAD_PUBLISHER.getByName(subscription.publisherKey);
+  const secrets = await applePublishingSecrets();
+  await configure(account.stub, secrets);
+  await configure(destination, secrets);
+
+  const listenerMutations: { path: string; playlistId: string | null; token: string | null }[] = [];
+  let personalMarker = "";
+  vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
+    const url = new URL(input);
+    const method = init?.method ?? "GET";
+    const token = new Headers(init?.headers).get("Music-User-Token");
+    if (method !== "GET") listenerMutations.push({ path: url.pathname, playlistId: url.searchParams.get("ids[playlists]"), token });
+    if (url.pathname === "/v1/me/library") return new Response(null, { status: 202 });
+    if (url.pathname === "/v1/catalog/us/playlists/pl.service/library") {
+      if (!listenerMutations.length) return Response.json({ data: [] });
+      return Response.json({ data: [{ id: "p.listener", type: "library-playlists" }] });
+    }
+    if (url.pathname === "/v1/me/library/playlists") {
+      personalMarker = JSON.parse(String(init?.body)).attributes.description;
+      return Response.json({ data: [{ id: "p.personal" }] });
+    }
+    if (url.pathname === "/v1/me/library/playlists/p.personal") {
+      return Response.json({ data: [{ id: "p.personal", attributes: { isPublic: true, description: personalMarker,
+        url: "https://music.apple.com/us/playlist/personal/pl.personal" } }] });
+    }
+    if (url.pathname === "/v1/me/library/playlists/p.personal/tracks") {
+      return Response.json({ data: [{ id: "i.123456", type: "library-songs", attributes: { playParams: { catalogId: "123456" } } }] });
+    }
+    throw new Error(`Unexpected Apple request: ${url}`);
+  }));
+
+  await destination.wake(subscription.publisherKey);
+  expect(await runDurableObjectAlarm(destination)).toBe(true);
+  expect(listenerMutations).toEqual([{ path: "/v1/me/library", playlistId: "pl.service", token: "apple-listener" }]);
+  expect(await accounts.subscription(account.accountId, view.publicCapability)).toMatchObject({
+    status: "synced", appliedRevision: 1, verifiedPlaylistId: "p.listener", verifiedPlaylistUrl: canonicalUrl,
+  });
+});
+
+it("observes service-owned Apple playlist updates without mutating listener playlists", async () => {
+  const threads = new D1ThreadStore(env.DB);
+  const view = await threads.create("Shared Apple updates", nanoid(22));
+  await threads.add(view.publicCapability, {
+    expectedRevision: 0,
+    requestKey: "first-apple-song",
+    source: { provider: "apple", id: "123456", storefront: "us" },
+    track: { title: "First", artist: "Artist", isrc: null, artworkUrl: null, complete: false,
+      spotifyUrl: null, appleUrl: "https://music.apple.com/us/song/123456" },
+  });
+  const canonicalUrl = "https://music.apple.com/us/playlist/shared/pl.service";
+  await env.DB.prepare(`UPDATE thread_publications SET connected = 1, service_owned = 1, status = 'synced', blocked_reason = NULL,
+    applied_revision = requested_revision, verified_playlist_id = 'p.service', verified_playlist_url = ?
+    WHERE provider = 'apple' AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
+    .bind(canonicalUrl, view.publicCapability).run();
+
+  const accounts = new D1AccountStore(env.DB);
+  const account = await accountFixture("apple", { teamId: "TEAM123456", musicUserToken: "apple-listener", storefront: "us" });
+  const subscription = await accounts.subscribe(account.accountId, view.publicCapability);
+  await env.DB.prepare(`UPDATE thread_subscriptions SET status = 'synced', applied_revision = requested_revision,
+    verified_playlist_id = 'p.listener', verified_playlist_url = ? WHERE publisher_key = ?`)
+    .bind(canonicalUrl, subscription.publisherKey).run();
+  await threads.add(view.publicCapability, {
+    expectedRevision: 1,
+    requestKey: "second-apple-song",
+    source: { provider: "apple", id: "234567", storefront: "us" },
+    track: { title: "Second", artist: "Artist", isrc: null, artworkUrl: null, complete: false,
+      spotifyUrl: null, appleUrl: "https://music.apple.com/us/song/234567" },
+  });
+  await env.DB.prepare(`UPDATE thread_publications SET status = 'synced', applied_revision = requested_revision,
+    verified_playlist_id = 'p.service', verified_playlist_url = ?
+    WHERE provider = 'apple' AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
+    .bind(canonicalUrl, view.publicCapability).run();
+
+  const destination = env.THREAD_PUBLISHER.getByName(subscription.publisherKey);
+  const secrets = await applePublishingSecrets();
+  await configure(account.stub, secrets);
+  await configure(destination, secrets);
+  const listenerMutations: string[] = [];
+  let personalMarker = "";
+  vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
+    const url = new URL(input);
+    const method = init?.method ?? "GET";
+    if (method !== "GET") listenerMutations.push(`${method} ${url.pathname}${url.search}`);
+    if (url.pathname === "/v1/catalog/us/playlists/pl.service/library") {
+      return Response.json({ data: [{ id: "p.listener", type: "library-playlists" }] });
+    }
+    if (url.pathname === "/v1/me/library/playlists") {
+      personalMarker = JSON.parse(String(init?.body)).attributes.description;
+      return Response.json({ data: [{ id: "p.personal" }] });
+    }
+    if (url.pathname === "/v1/me/library/playlists/p.personal") {
+      return Response.json({ data: [{ id: "p.personal", attributes: { isPublic: true, description: personalMarker,
+        url: "https://music.apple.com/us/playlist/personal/pl.personal" } }] });
+    }
+    if (url.pathname === "/v1/me/library/playlists/p.personal/tracks") {
+      return Response.json({ data: ["123456", "234567"].map(id => ({ id: `i.${id}`, type: "library-songs",
+        attributes: { playParams: { catalogId: id } } })) });
+    }
+    throw new Error(`Unexpected Apple request: ${url}`);
+  }));
+
+  await destination.wake(subscription.publisherKey);
+  expect(await runDurableObjectAlarm(destination)).toBe(true);
+  expect(listenerMutations).toEqual([]);
+  expect(await accounts.subscription(account.accountId, view.publicCapability)).toMatchObject({
+    status: "synced", appliedRevision: 2, verifiedPlaylistId: "p.listener", verifiedPlaylistUrl: canonicalUrl,
+  });
+});
+
+it("reports missing Apple listener authorization before attempting cross-provider matching", async () => {
+  const threads = new D1ThreadStore(env.DB);
+  const view = await threads.create("Shared Apple authorization", nanoid(22));
+  await threads.add(view.publicCapability, {
+    expectedRevision: 0,
+    requestKey: "spotify-song",
+    source: { provider: "spotify", id: "S".repeat(22), storefront: "us" },
+    track: { title: "Song", artist: "Artist", isrc: null, artworkUrl: null, complete: false,
+      spotifyUrl: `https://open.spotify.com/track/${"S".repeat(22)}`, appleUrl: null },
+  });
+  await env.DB.prepare(`UPDATE thread_publications SET connected = 1, service_owned = 1, status = 'synced', applied_revision = requested_revision,
+    verified_playlist_id = 'p.service', verified_playlist_url = 'https://music.apple.com/us/playlist/shared/pl.service'
+    WHERE provider = 'apple' AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
+    .bind(view.publicCapability).run();
+  const accountId = crypto.randomUUID();
+  await env.DB.prepare("INSERT INTO accounts(id, provider, provider_subject, label) VALUES (?, 'apple', ?, 'Listener')")
+    .bind(accountId, accountId).run();
+  const accounts = new D1AccountStore(env.DB);
+  const subscription = await accounts.subscribe(accountId, view.publicCapability);
+  const destination = env.THREAD_PUBLISHER.getByName(subscription.publisherKey);
+  await configure(env.THREAD_PUBLISHER.getByName(`account_${accountId}`), await applePublishingSecrets());
+  await configure(destination, await applePublishingSecrets());
+
+  await destination.wake(subscription.publisherKey);
+  expect(await runDurableObjectAlarm(destination)).toBe(true);
+
+  expect(await accounts.subscription(accountId, view.publicCapability)).toMatchObject({
+    status: "blocked", blockedReason: "publisher_not_authorized", appliedRevision: null,
+  });
+  expect(fetch).not.toHaveBeenCalled();
 });
 
 it("blocks an invalid Spotify refresh credential across the private RPC boundary", async () => {
@@ -260,6 +428,13 @@ async function accountFixture(provider: "spotify" | "apple" = "spotify", payload
   const stub = env.THREAD_PUBLISHER.getByName(`account_${accountId}`);
   await configure(stub, credentials);
   return { accountId, stub };
+}
+
+async function applePublishingSecrets() {
+  const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  const encoded = btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey))));
+  return { ...credentials, APPLE_PUBLISHING_ENABLED: "true", APPLE_MUSIC_KEY_ID: "KEY1234567", APPLE_MUSIC_TEAM_ID: "TEAM123456",
+    APPLE_MUSIC_PRIVATE_KEY_P8: `-----BEGIN PRIVATE KEY-----\n${encoded}\n-----END PRIVATE KEY-----` };
 }
 
 async function matchingThread(sourceProvider: "spotify" | "apple") {
@@ -351,127 +526,6 @@ it.each([true, false])("matches an Apple source with the Spotify subscriber toke
   expect((await accounts.account(unrelated.accountId))!.credentials).toBe("invalid-unrelated-credentials");
 });
 
-it.each(["none", "valid", "revoked", "source401", "source403", "source429"] as const)("resolves Spotify sources or backs off for an Apple subscriber using their account group and stored storefront: Spotify %s", async spotifyState => {
-  const linkedSpotify = spotifyState !== "none";
-  const sourceIsrc = spotifyState === "valid";
-  const f = await matchingThread("spotify");
-  const accounts = new D1AccountStore(env.DB);
-  const account = await accountFixture("apple", { teamId: "TEAM123456", musicUserToken: "apple-listener", storefront: "us" });
-  const unrelated = await accountFixture();
-  await unrelated.stub.setAccountCredentials(unrelated.accountId, "invalid-unrelated-credentials");
-  if (linkedSpotify) {
-    const spotify = await accountFixture();
-    const sessionHash = crypto.randomUUID();
-    await accounts.createSession(account.accountId, sessionHash, Date.now() + 60000);
-    expect(await accounts.linkAccounts(account.accountId, spotify.accountId, sessionHash)).toBe(true);
-  }
-  const subscription = await accounts.subscribe(account.accountId, f.cap);
-  const destination = env.THREAD_PUBLISHER.getByName(subscription.publisherKey);
-  const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
-  const encoded = btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey))));
-  const secrets = { ...credentials, APPLE_PUBLISHING_ENABLED: "true", APPLE_MUSIC_KEY_ID: "KEY1234567", APPLE_MUSIC_TEAM_ID: "TEAM123456",
-    APPLE_MUSIC_PRIVATE_KEY_P8: `-----BEGIN PRIVATE KEY-----\n${encoded}\n-----END PRIVATE KEY-----` };
-  await configure(account.stub, secrets);
-  await configure(destination, secrets);
-  const selectedId = "987654";
-  let marker = "";
-  let searches = 0;
-  let reads = 0;
-  let creates = 0;
-  let publicReads = 0;
-  let authenticatedSourceReads = 0;
-  let refreshes = 0;
-  let preflights = 0;
-  vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
-    const url = new URL(input);
-    const headers = new Headers(init?.headers);
-    if (url.hostname === "accounts.spotify.com") {
-      expect(linkedSpotify).toBe(true);
-      expect(String(init?.body)).toContain("refresh_token=account-refresh");
-      refreshes++;
-      if (spotifyState === "revoked") return Response.json({ error: "invalid_grant" }, { status: 400 });
-      return Response.json({ token_type: "Bearer", access_token: "linked-listener", expires_in: 3600 });
-    }
-    if (url.hostname === "api.spotify.com") {
-      expect(linkedSpotify).toBe(true);
-      expect(headers.get("Authorization")).toBe("Bearer linked-listener");
-      expect(url.pathname).toBe(`/v1/tracks/${f.sourceId}`);
-      authenticatedSourceReads++;
-      if (spotifyState.startsWith("source")) return Response.json({ error: "source denied" }, { status: Number(spotifyState.slice(6)), headers: { "Retry-After": "120" } });
-      return Response.json({ id: f.sourceId, type: "track", name: "Song", artists: [{ name: "Artist" }],
-        duration_ms: 180000, explicit: true, is_playable: true, external_ids: { isrc: "USABC2600001" } });
-    }
-    if (url.hostname === "open.spotify.com") {
-      expect(sourceIsrc).toBe(false);
-      expect(headers.get("Authorization")).toBeNull();
-      publicReads++;
-      if (url.pathname === "/oembed") return Response.json({ title: "Unreliable oEmbed title" });
-      if (url.pathname === `/track/${f.sourceId}`) return new Response(`<meta property="og:url" content="https://open.spotify.com/track/${f.sourceId}"><meta property="og:description" content="Artist · Album · Song · 2026"><meta name="music:release_date" content="2026-01-01">`);
-      expect(url.pathname).toBe(`/embed/track/${f.sourceId}`);
-      return new Response(`<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { state: { data: { entity: {
-        id: f.sourceId, type: "track", title: "Song", artists: [{ name: "Artist" }], duration: 180000, isExplicit: true, isPlayable: true,
-      } } } } } })}</script>`);
-    }
-    expect(url.hostname).toBe("api.music.apple.com");
-    expect(headers.get("Authorization")).toMatch(/^Bearer ey[\w-]+\.[\w-]+\.[\w-]+$/);
-    if (url.pathname.startsWith("/v1/catalog/")) {
-      expect(headers.get("Music-User-Token")).toBeNull();
-      expect(url.pathname).toBe(`/v1/catalog/gb/${sourceIsrc ? "songs" : "search"}`);
-      expect(url.searchParams.get(sourceIsrc ? "filter[isrc]" : "term")).toBe(sourceIsrc ? "USABC2600001" : "Song Artist");
-      searches++;
-      const song = { id: selectedId, type: "songs", attributes: { name: "Song", artistName: "Artist", durationInMillis: 180000,
-        contentRating: "explicit", isrc: "USABC2600001", playParams: { id: selectedId, kind: "song" } } };
-      return Response.json(sourceIsrc ? { data: [song] } : { results: { songs: { data: [song] } } });
-    }
-    expect(headers.get("Music-User-Token")).toBe("apple-listener");
-    if (url.pathname === "/v1/me/storefront") {
-      preflights++;
-      return Response.json({ data: [{ id: "gb" }] });
-    }
-    if (url.pathname === "/v1/me/library/playlists") {
-      creates++;
-      expect(init?.method).toBe("POST");
-      const body = JSON.parse(String(init?.body));
-      marker = body.attributes.description;
-      expect(body.relationships.tracks.data).toEqual([{ id: selectedId, type: "songs" }]);
-      return Response.json({ data: [{ id: "p.matched" }] });
-    }
-    if (url.pathname === "/v1/me/library/playlists/p.matched") {
-      return Response.json({ data: [{ id: "p.matched", attributes: { description: marker, isPublic: true, url: "https://music.apple.com/gb/playlist/pl.matched" } }] });
-    }
-    if (url.pathname === "/v1/me/library/playlists/p.matched/tracks") {
-      expect(await accounts.subscription(account.accountId, f.cap)).toMatchObject({ status: "pending", appliedRevision: null });
-      reads++;
-      return Response.json({ data: [{ id: "i.library-song", type: "library-songs", attributes: { playParams: { catalogId: selectedId } } }] });
-    }
-    throw new Error(`Unexpected provider request: ${url}`);
-  }));
-  await account.stub.authorizeAccountApple(account.accountId, "apple-listener");
-  await destination.wake(subscription.publisherKey);
-  expect(await runDurableObjectAlarm(destination)).toBe(true);
-  if (spotifyState === "source429") {
-    expect(await accounts.subscription(account.accountId, f.cap)).toMatchObject({ status: "failed", failureCode: "rate_limited",
-      appliedRevision: null, nextAttemptAt: Date.now() + 120000 });
-    expect({ searches, creates, reads, publicReads }).toEqual({ searches: 0, creates: 0, reads: 0, publicReads: 0 });
-    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM automatic_track_matches WHERE publisher_key = ?")
-      .bind(subscription.publisherKey).first<number>("count")).toBe(0);
-    return;
-  }
-  expect(await accounts.subscription(account.accountId, f.cap)).toMatchObject({ status: "synced", appliedRevision: 1,
-    verifiedPlaylistId: "p.matched", verifiedPlaylistUrl: "https://music.apple.com/gb/playlist/pl.matched" });
-  expect({ searches, creates, reads, preflights, publicReads, authenticatedSourceReads, refreshes }).toEqual({ searches: 1, creates: 1, reads: 2,
-    preflights: 1, publicReads: sourceIsrc ? 0 : 3, authenticatedSourceReads: linkedSpotify && spotifyState !== "revoked" ? 1 : 0, refreshes: linkedSpotify ? 1 : 0 });
-  const evidence = await env.DB.prepare("SELECT storefront, status, result_json FROM automatic_track_matches WHERE publisher_key = ?")
-    .bind(subscription.publisherKey).first<{ storefront: string; status: string; result_json: string }>();
-  expect(evidence).toMatchObject({ storefront: "gb", status: "matched" });
-  expect(JSON.parse(evidence!.result_json)).toMatchObject({ method: sourceIsrc ? "isrc" : "metadata", selected: { provider: "apple", id: selectedId, explicit: true } });
-  expect((await accounts.account(unrelated.accountId))!.credentials).toBe("invalid-unrelated-credentials");
-  await runInDurableObject(destination, async (_, state) => {
-    expect(await state.storage.get(`apple:${subscription.publisherKey}`)).toMatchObject({ appliedRevision: 1, appliedTrackIds: [selectedId], intent: null,
-      verifiedUrl: "https://music.apple.com/gb/playlist/pl.matched" });
-  });
-});
-
 it("serializes account refreshes across subscriptions and persists rotated encrypted tokens", async () => {
   const { accountId, stub } = await accountFixture();
   const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
@@ -525,7 +579,6 @@ it("rejects account credential access from another object and never falls back t
     const object = instance as unknown as ThreadPublisher;
     await expect(object.getAccountSpotifyToken("other")).rejects.toThrow("account_object_required");
     await expect(object.setAccountCredentials("other", "{}")).rejects.toThrow("account_object_required");
-    await expect(object.getAccountAppleCredentials("other")).rejects.toThrow("account_object_required");
     await expect(object.getAccountSpotifyToken(accountId)).rejects.toMatchObject({ status: 401 });
   });
   expect(fetch).not.toHaveBeenCalled();
@@ -587,114 +640,29 @@ it("publishes separate subscriber destinations with only their own account token
   expect((await new D1PublicationStore(env.DB).target(f.key))!.status).toBe("pending");
 });
 
-it("checks the Apple subscription journal before replacing authorization", async () => {
-  const threads = new D1ThreadStore(env.DB);
-  const view = await threads.create("Apple listener", nanoid(22));
-  const { accountId } = await accountFixture("apple", { teamId: "TEAM123456", musicUserToken: "old-user", storefront: "us" });
-  const { D1AccountStore } = await import("./account-db.js");
-  const subscription = await new D1AccountStore(env.DB).subscribe(accountId, view.publicCapability);
-  await new D1AccountStore(env.DB).unsubscribe(accountId, view.publicCapability);
-  const stub = env.THREAD_PUBLISHER.getByName(subscription.publisherKey);
-  const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
-  const encoded = btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey))));
-  await configure(stub, { APPLE_MUSIC_KEY_ID: "KEY1234567", APPLE_MUSIC_TEAM_ID: "TEAM123456", APPLE_MUSIC_PRIVATE_KEY_P8: `-----BEGIN PRIVATE KEY-----\n${encoded}\n-----END PRIVATE KEY-----` });
-  await runInDurableObject(stub, async (instance, state) => {
-    const object = instance as unknown as ThreadPublisher;
-    await state.storage.put(`apple:${subscription.publisherKey}`, { intent: { kind: "create" }, providerPlaylistId: null });
-    await expect(object.validateAccountAppleToken(subscription.publisherKey, "replacement")).rejects.toThrow("create_unresolved");
-    expect(fetch).not.toHaveBeenCalled();
-    await state.storage.put(`apple:${subscription.publisherKey}`, { providerPlaylistId: "p.unverified" });
-    vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
-      expect(new Headers(init?.headers).get("Music-User-Token")).toBe("replacement");
-      if (input.endsWith("/storefront")) return Response.json({ data: [{ id: "us" }] });
-      expect(input).toBe("https://api.music.apple.com/v1/me/library/playlists/p.unverified");
-      return Response.json({ data: [{ id: "p.unverified", attributes: { canEdit: false } }] });
-    }));
-    await expect(object.validateAccountAppleToken(subscription.publisherKey, "replacement")).rejects.toMatchObject({ code: "destination_mismatch" });
-  });
-});
-
-it("finishes an Apple creation before validating replacement authorization against its new destination", async () => {
-  const { D1AccountStore } = await import("./account-db.js");
+it("reauthorizes an Apple listener without inspecting or taking ownership of the shared playlist", async () => {
   const accounts = new D1AccountStore(env.DB);
-  const view = await new D1ThreadStore(env.DB).create("Apple race", nanoid(22));
-  const { accountId, stub } = await accountFixture("apple", { teamId: "TEAM123456", musicUserToken: "original-user", storefront: "us" });
+  const view = await new D1ThreadStore(env.DB).create("Apple listener", nanoid(22));
+  const { accountId, stub } = await accountFixture("apple", { teamId: "TEAM123456", musicUserToken: "old-user", storefront: "us" });
   const subscription = await accounts.subscribe(accountId, view.publicCapability);
-  const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
-  const encoded = btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey))));
-  const appleSecrets = { APPLE_PUBLISHING_ENABLED: "true", APPLE_MUSIC_KEY_ID: "KEY1234567", APPLE_MUSIC_TEAM_ID: "TEAM123456", APPLE_MUSIC_PRIVATE_KEY_P8: `-----BEGIN PRIVATE KEY-----\n${encoded}\n-----END PRIVATE KEY-----` };
-  await configure(stub, appleSecrets);
-  await configure(env.THREAD_PUBLISHER.getByName(subscription.publisherKey), appleSecrets);
-  let marker = "";
-  const events: string[] = [];
+  await env.DB.prepare(`UPDATE thread_subscriptions SET status = 'synced', applied_revision = requested_revision,
+    verified_playlist_id = 'p.listener', verified_playlist_url = 'https://music.apple.com/us/playlist/shared/pl.service'
+    WHERE publisher_key = ?`).bind(subscription.publisherKey).run();
+  const secrets = await applePublishingSecrets();
+  await configure(stub, secrets);
+  const requests: string[] = [];
   vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
-    const path = new URL(input).pathname;
-    const token = new Headers(init?.headers).get("Music-User-Token");
-    if (path.endsWith("/storefront")) return Response.json({ data: [{ id: "us" }] });
-    if (path === "/v1/me/library/playlists") {
-      expect(token).toBe("original-user");
-      marker = JSON.parse(String(init?.body)).attributes.description;
-      events.push("create-started");
-      await new Promise(resolve => setTimeout(resolve, 10));
-      events.push("create-finished");
-      return Response.json({ data: [{ id: "p.raced" }] });
-    }
-    if (path === "/v1/me/library/playlists/p.raced") {
-      if (token === "replacement-user") {
-        events.push("replacement-checked");
-        return Response.json({ data: [{ id: "p.raced", attributes: { canEdit: false } }] });
-      }
-      return Response.json({ data: [{ id: "p.raced", attributes: { description: marker, isPublic: true, url: "https://music.apple.com/us/playlist/pl.raced" } }] });
-    }
-    if (path === "/v1/me/library/playlists/p.raced/tracks") return Response.json({ data: [] });
-    throw new Error("Unexpected Apple request");
-  }));
-  await runInDurableObject(stub, async instance => {
-    const object = instance as unknown as ThreadPublisher;
-    const publishing = object.publishAppleSubscription(accountId, subscription.publisherKey);
-    const authorizing = object.authorizeAccountApple(accountId, "replacement-user");
-    const results = await Promise.allSettled([publishing, authorizing]);
-    expect(results[0]).toEqual({ status: "fulfilled", value: null });
-    expect(results[1]).toMatchObject({ status: "rejected", reason: { message: "destination_mismatch" } });
-    expect((await object.getAccountAppleCredentials(accountId)).musicUserToken).toBe("original-user");
-  });
-  expect(events).toEqual(["create-started", "create-finished", "replacement-checked"]);
-  expect(await accounts.subscription(accountId, view.publicCapability)).toMatchObject({ status: "synced", verifiedPlaylistId: "p.raced" });
-});
-
-it("publishes Apple subscriptions through the account queue after replacing credentials", async () => {
-  const { D1AccountStore } = await import("./account-db.js");
-  const accounts = new D1AccountStore(env.DB);
-  const threads = new D1ThreadStore(env.DB);
-  const view = await threads.create("Apple account alarm", nanoid(22));
-  const { accountId, stub } = await accountFixture("apple", { teamId: "TEAM123456", musicUserToken: "original-user", storefront: "us" });
-  const subscription = await accounts.subscribe(accountId, view.publicCapability);
-  const destination = env.THREAD_PUBLISHER.getByName(subscription.publisherKey);
-  const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
-  const encoded = btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey))));
-  const appleSecrets = { APPLE_PUBLISHING_ENABLED: "true", APPLE_MUSIC_KEY_ID: "KEY1234567", APPLE_MUSIC_TEAM_ID: "TEAM123456", APPLE_MUSIC_PRIVATE_KEY_P8: `-----BEGIN PRIVATE KEY-----\n${encoded}\n-----END PRIVATE KEY-----` };
-  await configure(stub, appleSecrets);
-  await configure(destination, appleSecrets);
-  let marker = "";
-  vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
+    requests.push(new URL(input).pathname);
     expect(new Headers(init?.headers).get("Music-User-Token")).toBe("replacement-user");
-    const path = new URL(input).pathname;
-    if (path.endsWith("/storefront")) return Response.json({ data: [{ id: "us" }] });
-    if (path === "/v1/me/library/playlists") {
-      marker = JSON.parse(String(init?.body)).attributes.description;
-      return Response.json({ data: [{ id: "p.account" }] });
-    }
-    if (path === "/v1/me/library/playlists/p.account") return Response.json({ data: [{ id: "p.account", attributes: { description: marker, isPublic: true, url: "https://music.apple.com/us/playlist/pl.account" } }] });
-    if (path === "/v1/me/library/playlists/p.account/tracks") return Response.json({ data: [] });
-    throw new Error("Unexpected Apple request");
+    return Response.json({ data: [{ id: "us" }] });
   }));
+
   await stub.authorizeAccountApple(accountId, "replacement-user");
-  expect((await accounts.account(accountId))!.credentials).not.toMatch(/replacement-user|original-user/);
-  await destination.wake(subscription.publisherKey);
-  expect(await runDurableObjectAlarm(destination)).toBe(true);
-  expect(await accounts.subscription(accountId, view.publicCapability)).toMatchObject({ status: "synced", verifiedPlaylistId: "p.account" });
-  await runInDurableObject(destination, async instance => {
-    await expect((instance as unknown as ThreadPublisher).runAppleSubscription(subscription.publisherKey, "other-account", { developerToken: "private", musicUserToken: "private" })).rejects.toMatchObject({ status: 401 });
+
+  expect(requests).toEqual(["/v1/me/storefront"]);
+  expect((await accounts.account(accountId))!.credentials).not.toMatch(/replacement-user|old-user/);
+  expect(await accounts.subscription(accountId, view.publicCapability)).toMatchObject({
+    publisherKey: subscription.publisherKey, status: "pending", verifiedPlaylistId: "p.listener",
   });
   await runInDurableObject(stub, async instance => {
     const object = instance as unknown as ThreadPublisher;

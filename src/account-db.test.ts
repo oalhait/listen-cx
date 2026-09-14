@@ -1,8 +1,11 @@
 import { env } from "cloudflare:workers";
 import { nanoid } from "nanoid";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { D1AccountStore } from "./account-db.js";
+import { D1PublicationStore } from "./publication-db.js";
 import { D1ThreadStore } from "./thread-db.js";
+import { authorizeManagementCapability } from "./thread-security.js";
+import { runLibrarySubscription, runPublication } from "./publication-runner.js";
 
 it("keeps provider accounts separate and preserves credentials unless explicitly replaced", async () => {
   const store = new D1AccountStore(env.DB);
@@ -59,6 +62,183 @@ it("creates independent subscriber destinations without changing the collaborati
   expect((await threads.get(thread.publicCapability))!.revision).toBe(0);
   expect(await store.subscription("missing", thread.publicCapability)).toBeNull();
   await expect(store.subscribe(first.id, nanoid(22))).rejects.toMatchObject({ code: "not_found" });
+});
+
+it("queues one service-owned Apple publication before listener library subscriptions", async () => {
+  const accounts = new D1AccountStore(env.DB);
+  const thread = await new D1ThreadStore(env.DB).create("Together", nanoid(22));
+  const first = await accounts.upsert("apple", "first-apple-listener", "First");
+  const second = await accounts.upsert("apple", "second-apple-listener", "Second");
+  await accounts.subscribe(first.id, thread.publicCapability);
+  await accounts.subscribe(second.id, thread.publicCapability);
+
+  const targets = (await new D1PublicationStore(env.DB).due(thread.publicCapability))
+    .filter(target => target.provider === "apple");
+  expect(targets).toHaveLength(1);
+  expect(targets[0]).toMatchObject({ accountId: null, provider: "apple", status: "pending", serviceOwned: true });
+});
+
+it("keeps Thread removal available after an Apple listener subscribes", async () => {
+  const key = nanoid(22);
+  const threads = new D1ThreadStore(env.DB);
+  const thread = await threads.create("Editable shared playlist", key);
+  await threads.add(thread.publicCapability, {
+    expectedRevision: 0,
+    requestKey: "song",
+    source: { provider: "apple", id: "123456", storefront: "us" },
+    track: { title: "Song", artist: "Artist", artworkUrl: null, spotifyUrl: null,
+      appleUrl: "https://music.apple.com/us/song/123456", isrc: null, complete: false },
+  });
+  const account = await new D1AccountStore(env.DB).upsert("apple", "editing-listener", "Listener");
+  await new D1AccountStore(env.DB).subscribe(account.id, thread.publicCapability);
+  const authorization = await authorizeManagementCapability(threads, thread.publicCapability, key);
+  const songId = (await threads.get(thread.publicCapability))!.contributions[0]!.id;
+
+  await expect(threads.manage(authorization!, { kind: "remove", id: songId, requestKey: "remove", expectedRevision: 1 }))
+    .resolves.toEqual({ revision: 2, replayed: false });
+});
+
+it("migrates existing Apple subscribers away from personal playlist destinations", async () => {
+  const accounts = new D1AccountStore(env.DB);
+  const threads = new D1ThreadStore(env.DB);
+  const thread = await threads.create("Existing Apple copy", nanoid(22));
+  const account = await accounts.upsert("apple", "existing-apple-listener", "Listener");
+  const subscription = await accounts.subscribe(account.id, thread.publicCapability);
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE thread_publications SET connected = 1, status = 'synced', blocked_reason = NULL,
+      applied_revision = requested_revision, verified_playlist_id = 'p.owner',
+      verified_playlist_url = 'https://music.apple.com/us/playlist/owner/pl.owner'
+      WHERE provider = 'apple' AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
+      .bind(thread.publicCapability),
+    env.DB.prepare(`UPDATE thread_subscriptions SET status = 'synced', applied_revision = 0,
+      verified_playlist_id = 'p.personal', verified_playlist_url = 'https://music.apple.com/us/playlist/personal/pl.personal'
+      WHERE publisher_key = ?`).bind(subscription.publisherKey),
+  ]);
+
+  await env.DB.prepare("UPDATE provider_service_migrations SET status = 'pending' WHERE provider = 'apple'").run();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE thread_publications SET edit_locked = 1 WHERE provider = 'apple' AND connected = 1"),
+    env.DB.prepare(`UPDATE thread_publications SET connected = 1, service_owned = 1, service_migration_pending = 1,
+      service_replacement_pending = CASE WHEN verified_playlist_id IS NULL THEN 0 ELSE 1 END,
+      status = 'blocked', blocked_reason = 'service_migration_pending', failure_code = NULL,
+      next_attempt_at = 32503680000000 WHERE provider = 'apple' AND EXISTS (
+        SELECT 1 FROM thread_subscriptions subscription WHERE subscription.thread_id = thread_publications.thread_id
+          AND subscription.provider = 'apple' AND subscription.connected = 1)`),
+    env.DB.prepare(`UPDATE thread_subscriptions SET service_migration_pending = 1, status = 'blocked',
+      blocked_reason = 'service_migration_pending', failure_code = NULL, next_attempt_at = 32503680000000
+      WHERE provider = 'apple' AND connected = 1`),
+  ]);
+
+  expect(await new D1PublicationStore(env.DB).canonical(thread.publicCapability, "apple")).toMatchObject({
+    connected: true, status: "blocked", verifiedPlaylistId: "p.owner",
+  });
+  const publications = new D1PublicationStore(env.DB);
+  const publisherKey = (await env.DB.prepare(`SELECT publisher_key FROM thread_publications WHERE provider = 'apple'
+    AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
+    .bind(thread.publicCapability).first<string>("publisher_key"))!;
+  expect(await publications.target(publisherKey, true)).toMatchObject({ serviceOwned: true,
+    serviceReplacementPending: true, nextAttemptAt: 32503680000000 });
+  expect(await accounts.subscription(account.id, thread.publicCapability)).toMatchObject({
+    connected: true, status: "blocked", blockedReason: "service_migration_pending", appliedRevision: 0,
+    verifiedPlaylistId: "p.personal", verifiedPlaylistUrl: "https://music.apple.com/us/playlist/personal/pl.personal",
+  });
+  expect((await new D1ThreadStore(env.DB).get(thread.publicCapability))!.publications.find(row => row.provider === "apple"))
+    .toMatchObject({ editLocked: true });
+  expect(await publications.due(thread.publicCapability)).toEqual([]);
+
+  await env.DB.prepare("UPDATE threads SET revision = revision + 1 WHERE public_capability = ?")
+    .bind(thread.publicCapability).run();
+  await accounts.requeueSubscriptions(account.id, "apple");
+  await accounts.retry(account.id, thread.publicCapability);
+  await accounts.subscribe(account.id, thread.publicCapability);
+  const publish = vi.fn();
+  const add = vi.fn();
+  expect(await runPublication(env.DB, publisherKey, { apple: publish })).toBe(32503680000000);
+  expect(await runLibrarySubscription(env.DB, subscription.publisherKey, add)).toBe(32503680000000);
+  expect(publish).not.toHaveBeenCalled();
+  expect(add).not.toHaveBeenCalled();
+
+  await publications.activateAppleServicePublications();
+
+  expect(await publications.canonical(thread.publicCapability, "apple")).toMatchObject({
+    connected: true, status: "pending", requestedRevision: 1,
+  });
+  expect(await accounts.subscription(account.id, thread.publicCapability)).toMatchObject({
+    connected: true, status: "pending", blockedReason: null, requestedRevision: 1,
+  });
+
+  await publications.verified(publisherKey, 1, "p.service", "https://music.apple.com/us/playlist/service/pl.service");
+  await publications.verified(publisherKey, 1, "p.other", "https://music.apple.com/us/playlist/other/pl.other");
+  expect(await publications.canonical(thread.publicCapability, "apple")).toMatchObject({
+    verifiedPlaylistId: "p.service", verifiedPlaylistUrl: "https://music.apple.com/us/playlist/service/pl.service",
+  });
+});
+
+it.each(["insert", "reconnect"] as const)("fences an Apple subscription %s made by the old Worker during rollout", async mode => {
+  const accounts = new D1AccountStore(env.DB);
+  const thread = await new D1ThreadStore(env.DB).create(`Rollout ${mode}`, nanoid(22));
+  const account = await accounts.upsert("apple", `rollout-${mode}`, "Listener");
+  const publisherKey = crypto.randomUUID();
+  if (mode === "reconnect") {
+    await env.DB.prepare(`INSERT INTO thread_subscriptions(account_id, thread_id, provider, publisher_key, connected, requested_revision)
+      SELECT ?, id, 'apple', ?, 0, revision FROM threads WHERE public_capability = ?`)
+      .bind(account.id, publisherKey, thread.publicCapability).run();
+  }
+  await env.DB.prepare("UPDATE provider_service_migrations SET status = 'pending' WHERE provider = 'apple'").run();
+
+  await env.DB.prepare(`INSERT INTO thread_subscriptions(account_id, thread_id, provider, publisher_key, requested_revision)
+    SELECT ?, id, 'apple', ?, revision FROM threads WHERE public_capability = ?
+    ON CONFLICT(account_id, thread_id) DO UPDATE SET connected = 1,
+      requested_revision = excluded.requested_revision, status = 'pending', blocked_reason = NULL,
+      failure_code = NULL, updated_at = datetime('now') WHERE thread_subscriptions.connected = 0`)
+    .bind(account.id, publisherKey, thread.publicCapability).run();
+
+  const subscription = await accounts.subscription(account.id, thread.publicCapability);
+  expect(subscription).toMatchObject({ connected: false, status: "blocked", blockedReason: "service_migration_pending",
+    nextAttemptAt: 32503680000000 });
+  const publications = new D1PublicationStore(env.DB);
+  expect(await publications.canonical(thread.publicCapability, "apple")).toMatchObject({
+    connected: true, status: "blocked",
+  });
+  expect((await publications.target((await env.DB.prepare(`SELECT publisher_key FROM thread_publications
+    WHERE provider = 'apple' AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
+    .bind(thread.publicCapability).first<string>("publisher_key"))!))!).toMatchObject({
+    serviceOwned: true, nextAttemptAt: 32503680000000,
+  });
+  expect(await env.DB.prepare(`SELECT kind, connected FROM apple_service_migration_backups
+    WHERE thread_id = (SELECT id FROM threads WHERE public_capability = ?) ORDER BY kind`)
+    .bind(thread.publicCapability).all()).toMatchObject({ results: [
+    { kind: "publication", connected: 0 }, { kind: "subscription", connected: 1 },
+  ] });
+
+  await publications.activateAppleServicePublications();
+
+  expect(await accounts.subscription(account.id, thread.publicCapability)).toMatchObject({ connected: true, status: "pending" });
+  expect(await publications.canonical(thread.publicCapability, "apple")).toMatchObject({ connected: true, status: "pending" });
+  expect(await env.DB.prepare("SELECT status FROM provider_service_migrations WHERE provider = 'apple'").first<string>("status"))
+    .toBe("active");
+  expect(await env.DB.prepare(`SELECT COUNT(*) AS count FROM apple_service_migration_backups
+    WHERE thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
+    .bind(thread.publicCapability).first<number>("count")).toBe(2);
+});
+
+it("does not let repeated Apple subscribe clear a shared publication block", async () => {
+  const accounts = new D1AccountStore(env.DB);
+  const thread = await new D1ThreadStore(env.DB).create("Blocked shared playlist", nanoid(22));
+  const account = await accounts.upsert("apple", "blocked-listener", "Listener");
+  await accounts.subscribe(account.id, thread.publicCapability);
+  await env.DB.prepare(`UPDATE thread_publications SET status = 'blocked', blocked_reason = 'publisher_not_authorized', next_attempt_at = 123
+    WHERE provider = 'apple' AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
+    .bind(thread.publicCapability).run();
+
+  await accounts.subscribe(account.id, thread.publicCapability);
+
+  expect(await new D1PublicationStore(env.DB).canonical(thread.publicCapability, "apple")).toMatchObject({
+    status: "blocked", connected: true,
+  });
+  expect(await env.DB.prepare(`SELECT blocked_reason, next_attempt_at FROM thread_publications WHERE provider = 'apple'
+    AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`).bind(thread.publicCapability).first())
+    .toEqual({ blocked_reason: "publisher_not_authorized", next_attempt_at: 123 });
 });
 
 it("queues connected subscribers on revisions and reuses a disconnected destination when resubscribed", async () => {

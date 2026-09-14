@@ -6,17 +6,26 @@ const subscription = { provider: 'spotify', connected: true, status: 'synced', r
 const data = { account: { provider: 'spotify', connected: true }, subscription };
 
 it('shows synced only after matching revision and valid verified destination', () => {
-  expect(subscriptionMessage(data)).toContain('up to date');
+  expect(subscriptionMessage(data)).toBe('Your Spotify playlist is up to date.');
   expect(subscriptionMessage({ ...data, subscription: { ...subscription, appliedRevision: 1 } })).not.toContain('up to date');
   expect(subscriptionMessage({ ...data, subscription: { ...subscription, verifiedPlaylistId: null } })).not.toContain('up to date');
+  expect(subscriptionMessage({ ...data, subscription: { ...subscription, connected: false } })).toBe('Subscribe to keep your own Spotify playlist updated.');
   expect(subscriptionMessage({ account: null, subscription: null })).toContain('Sign in');
   expect(subscriptionMessage({ account: { provider: 'other' } })).toContain('not supported');
 });
 
-it('explains identity and Apple copy failures without restricting the Thread', () => {
+it('describes Apple subscriptions as a shared playlist in the listener library', () => {
+  const apple = { account: { provider: 'apple', connected: true }, subscription: {
+    ...subscription, provider: 'apple', verifiedPlaylistId: 'p.listener', verifiedPlaylistUrl: 'https://music.apple.com/us/playlist/listen/pl.u-abc',
+  } };
+  expect(subscriptionMessage({ ...apple, subscription: { ...apple.subscription, connected: false } })).toBe('Subscribe to add the shared Apple Music playlist to your library.');
+  expect(subscriptionMessage(apple)).toBe('The shared Apple Music playlist is in your library and up to date.');
+});
+
+it('explains identity and shared playlist failures without restricting the Thread', () => {
   expect(subscriptionMessage({ ...data, subscription: { ...subscription, blockedReason: 'identities_incomplete' } })).toBe('Some songs could not be matched on Spotify. Your songs are saved in this Thread.');
   expect(subscriptionMessage({ ...data, subscription: { ...subscription, failureCode: 'provider_drift' } })).toContain('changed outside this Thread');
-  expect(subscriptionMessage({ account: { provider: 'apple', connected: true }, subscription: { ...subscription, blockedReason: 'append_only' } })).toContain('copy is paused');
+  expect(subscriptionMessage({ account: { provider: 'apple', connected: true }, subscription: { ...subscription, blockedReason: 'append_only' } })).toContain('shared Apple Music playlist is paused');
 });
 
 it('accepts only provider playlist URLs and the exact Spotify destination', () => {

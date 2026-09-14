@@ -130,17 +130,31 @@ export class D1AccountStore {
 
   async subscribe(accountId: string, capability: string): Promise<Subscription> {
     const db = this.db.withSession("first-primary");
-    await db.prepare(`INSERT INTO thread_subscriptions(account_id, thread_id, provider, publisher_key, requested_revision)
-      SELECT a.id, t.id, a.provider, ?, t.revision FROM accounts a CROSS JOIN threads t
-      WHERE a.id = ? AND t.public_capability = ?
-      ON CONFLICT(account_id, thread_id) DO UPDATE SET connected = 1,
-      requested_revision = excluded.requested_revision, status = 'pending', blocked_reason = NULL,
-      failure_code = NULL, updated_at = datetime('now') WHERE thread_subscriptions.connected = 0`)
-      .bind(crypto.randomUUID(), accountId, capability).run();
+    await db.batch([
+      db.prepare(`INSERT INTO thread_subscriptions(account_id, thread_id, provider, publisher_key, requested_revision)
+        SELECT a.id, t.id, a.provider, ?, t.revision FROM accounts a CROSS JOIN threads t
+        WHERE a.id = ? AND t.public_capability = ?
+        ON CONFLICT(account_id, thread_id) DO UPDATE SET connected = 1,
+        requested_revision = excluded.requested_revision, status = 'pending', blocked_reason = NULL,
+        failure_code = NULL, updated_at = datetime('now') WHERE thread_subscriptions.connected = 0`)
+        .bind(crypto.randomUUID(), accountId, capability),
+      db.prepare(`UPDATE thread_publications SET connected = 1, service_owned = 1, status = 'pending',
+        service_replacement_pending = CASE WHEN verified_playlist_id IS NULL THEN 0 ELSE 1 END,
+        blocked_reason = NULL, failure_code = NULL, next_attempt_at = 0
+        WHERE provider = 'apple' AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)
+        AND service_owned = 0 AND EXISTS (SELECT 1 FROM accounts WHERE id = ? AND provider = 'apple')`)
+        .bind(capability, accountId),
+    ]);
     const row = await db.prepare(`${subscriptionSelect} WHERE s.account_id = ? AND t.public_capability = ?`)
       .bind(accountId, capability).first<SubscriptionRow>();
     if (!row) throw new ThreadError(404, "not_found", "Account or Thread not found.");
     return { ...row, connected: row.connected === 1 };
+  }
+
+  async requeueSubscriptions(accountId: string, provider: Provider): Promise<void> {
+    await this.db.withSession("first-primary").prepare(`UPDATE thread_subscriptions SET status = 'pending',
+      blocked_reason = NULL, failure_code = NULL, next_attempt_at = 0, updated_at = datetime('now')
+      WHERE account_id = ? AND provider = ? AND connected = 1`).bind(accountId, provider).run();
   }
 
   async subscription(accountId: string, capability: string): Promise<Subscription | null> {

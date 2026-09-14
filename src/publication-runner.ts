@@ -6,6 +6,7 @@ import type { Provider } from "./urls.js";
 export type PublicationInput = { playlistKey: string; title: string; revision: number; trackIds: string[] };
 export type PublicationReadback = { revision: number; playlistId: string; playlistUrl: string };
 export type ProviderPublishers = Partial<Record<Provider, (input: PublicationInput) => Promise<PublicationReadback>>>;
+export type LibrarySubscriptionInput = { playlistUrl: string; previousPlaylistUrl: string | null };
 
 function failure(error: unknown): { code: string; blocked: boolean; delay: number } {
   const value = error as { code?: unknown; status?: unknown; retryAfterSeconds?: unknown } | null;
@@ -65,4 +66,27 @@ export async function runPublication(db: D1Database, publisherKey: string, publi
   }
   const current = await threads.get(target.capability);
   return current && current.revision > desired.revision ? Date.now() + 1 : null;
+}
+
+export async function runLibrarySubscription(db: D1Database, publisherKey: string,
+  subscribe: (input: LibrarySubscriptionInput) => Promise<{ playlistId: string; playlistUrl: string }>): Promise<number | null> {
+  const publications = new D1PublicationStore(db);
+  const target = await publications.target(publisherKey);
+  if (!target?.accountId) return null;
+  if (target.nextAttemptAt > Date.now()) return target.nextAttemptAt;
+  if (target.status === "synced" && target.appliedRevision === target.requestedRevision) return null;
+  const canonical = await publications.canonical(target.capability, target.provider);
+  if (!canonical?.connected || canonical.status !== "synced" || canonical.appliedRevision !== target.requestedRevision
+    || !canonical.verifiedPlaylistId || !canonical.verifiedPlaylistUrl) return null;
+  try {
+    const result = await subscribe({ playlistUrl: canonical.verifiedPlaylistUrl, previousPlaylistUrl: target.verifiedPlaylistUrl });
+    await publications.verified(publisherKey, canonical.appliedRevision, result.playlistId, result.playlistUrl);
+  } catch (error) {
+    const result = failure(error);
+    const retryAt = result.blocked ? 0 : Date.now() + result.delay;
+    await publications.failed(publisherKey, target.requestedRevision, result.code, result.blocked, retryAt);
+    return result.blocked ? null : retryAt;
+  }
+  const current = await publications.target(publisherKey);
+  return current && current.requestedRevision > canonical.appliedRevision ? Date.now() + 1 : null;
 }

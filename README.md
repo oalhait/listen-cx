@@ -128,8 +128,11 @@ Local secrets belong in the git-ignored `.dev.vars` file. Apple token signing
 uses `APPLE_MUSIC_TEAM_ID`, `APPLE_MUSIC_KEY_ID`,
 `APPLE_MUSIC_PRIVATE_KEY_P8`, `APPLE_MUSIC_ALLOWED_ORIGINS`, and
 `APPLE_MUSIC_MEDIA_ID`. The private key stays server-side; only a short-lived JWT
-is returned. Each MusicKit listener still has to authorize their Apple Music
-account and subscription interactively.
+is returned. `APPLE_MUSIC_USER_TOKEN` is the separate library grant for the
+dedicated listen.cx Apple Music subscriber that owns shared Thread playlists;
+`APPLE_MUSIC_STOREFRONT` defaults to `us`. Each listener still authorizes their
+own Apple Music account interactively so the shared playlist can be added to
+their library.
 
 `SPOTIFY_CLIENT_ID` identifies the app in the browser Authorization Code + PKCE
 flow. A client ID alone does not authorize server-side Spotify writes or playback;
@@ -155,7 +158,7 @@ and conversation updates without discarding focus or drafts. Stale edits return
 Run `pnpm migrate:local` after pulling this change, then `pnpm dev`. Migration
 `0004` through `0006` add revisions, publication connections, and confirmed
 counterpart identities to the historical D1 schema. Migration `0007` adds accounts,
-sessions, OAuth state, and subscriber-owned publication rows.
+sessions, OAuth state, and subscription publication rows.
 Migration `0014` adds digest-backed collaboration participants, idempotent messages,
 advisory votes, moderation tombstones, and a social revision that is independent
 from playlist publication revisions.
@@ -163,6 +166,9 @@ Migration `0015` adds immutable participant attribution for songs and the profil
 triggers needed to refresh collaboration views without rewriting the already-applied
 `0014` migration.
 Migration `0016` adds race-safe per-participant and per-Jam vote-receipt limits.
+Migration `0017` activates one service-owned Apple publication for subscribed Threads
+and requeues existing Apple subscriptions to add that shared playlist to each listener
+library.
 Existing rows, capability digests, removed contributions, and historical positions
 are preserved. Legacy Threads start at revision zero with unverified catalog
 identities. The old Thread Durable Object is not restored.
@@ -202,7 +208,7 @@ All Thread mutations require JSON, a matching `Origin`, and
 | `POST /account/apple/authorize` | Verifies MusicKit permission and access to preserved destinations, then encrypts the account's music token. |
 | `POST /account/sign-out` | Revokes the current website session. Existing subscriptions keep syncing. |
 | `GET /api/threads/:capability/subscription` | Returns each connected provider's subscription and sync status. |
-| `POST /api/threads/:capability/subscription` | Signed-in account only: `{action: "subscribe" | "retry" | "unsubscribe", provider: "apple" | "spotify"}`. Subscribe is idempotent; unsubscribe affects only that provider and preserves its playlist and destination journal. Omitted provider retains the original session provider for older clients. |
+| `POST /api/threads/:capability/subscription` | Signed-in account only: `{action: "subscribe" | "retry" | "unsubscribe", provider: "apple" | "spotify"}`. Subscribe is idempotent. Apple adds the service-owned playlist to the listener library; Spotify maintains a personal destination. Unsubscribe affects only that provider and preserves provider resources. Omitted provider retains the original session provider for older clients. |
 | `POST /t/:capability/manage/identify` | Manager only: `{id, url, confirmed: true, requestKey, expectedRevision}` confirms an immutable counterpart from the other music app after source URL verification. |
 
 Mutation replies distinguish the committed receipt's revision from the current
@@ -259,12 +265,15 @@ and Apple catalog search. No contributor is required to connect both services.
 
 Publication status includes `connected`, `requestedRevision`, `appliedRevision`,
 `pending | blocked | failed | synced`, `blockedReason`, `failureCode`, and verified
-playlist ID/URL. Each connected provider has an independent destination per Thread. Migration
-`0007` queues connected subscribers whenever the Thread revision advances. Subscribing
-does not change the Thread revision or grant management rights. Legacy per-Thread
-Apple connections retain their existing edit restriction; new personal subscriptions
-do not lock website edits. A removal or reorder can therefore block an Apple copy,
-whose provider adapter only supports exact suffix additions.
+playlist ID/URL. Migration `0007` queues connected subscribers whenever the Thread
+revision advances. Migration `0017` changes Apple account subscriptions to reference
+one service-owned playlist per Thread. Apple listener rows record the listener's
+verified library relationship, not a separately created playlist. Spotify account
+subscriptions continue to use independent personal destinations. Subscribing does
+not change the Thread revision or grant management rights. Legacy per-Thread Apple
+connections retain their existing edit restriction; account subscriptions do not
+lock website edits. A removal or reorder can therefore pause the shared Apple
+playlist, whose provider adapter only supports exact suffix additions.
 - [ ] Investigate Apple Music playlist updates after song reordering or deletion. Spotify already applies the full ordered snapshot; Apple currently supports exact suffix additions only. Prove a safe update path with actual provider readback, including retries and duplicate songs, before changing the adapter.
 
 An old successful readback cannot mark a newer Thread revision synced.
@@ -275,7 +284,9 @@ and a scheduled sweep recovers work missed between commit and wakeup. Provider
 markers use private random destination keys, never Thread capabilities. No public
 route accepts destination IDs or publication reports. Account-token handoff requires a matching signed-in account or a valid browser-bound Apple onboarding grant.
 A separate account Durable Object serializes credential refresh and replacement
-across all of that account's subscriptions.
+across all of that account's subscriptions. An Apple listener operation can only add
+the canonical catalog playlist to that listener's library and verify the resulting
+library relationship; it cannot create or mutate a listener-owned playlist.
 
 Spotify creates one public playlist and replaces its contents to apply additions,
 removal, and order. Apple creates one public playlist and only appends an exact
@@ -321,9 +332,19 @@ Existing research sessions and per-Thread credentials are not imported into acco
 
 | Provider | Worker secrets |
 | --- | --- |
-| Spotify | `SPOTIFY_CLIENT_ID`, `PUBLISHER_ENCRYPTION_KEY` |
+| Spotify | `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REFRESH_TOKEN`, `PUBLISHER_ENCRYPTION_KEY` |
 | Sign in with Apple (optional) | `APPLE_SIGN_IN_CLIENT_ID`, `APPLE_SIGN_IN_KEY_ID`, `APPLE_SIGN_IN_TEAM_ID`, `APPLE_SIGN_IN_PRIVATE_KEY_P8` |
-| Apple Music library | `APPLE_MUSIC_KEY_ID`, `APPLE_MUSIC_TEAM_ID`, `APPLE_MUSIC_PRIVATE_KEY_P8`, `PUBLISHER_ENCRYPTION_KEY` |
+| Apple Music library | `APPLE_MUSIC_KEY_ID`, `APPLE_MUSIC_TEAM_ID`, `APPLE_MUSIC_PRIVATE_KEY_P8`, `APPLE_MUSIC_USER_TOKEN`, `PUBLISHER_ENCRYPTION_KEY` |
+
+The playlist owners are ordinary provider users, not client-credentials identities.
+For Apple Music, create a dedicated Apple ID with an active Apple Music subscription,
+authorize it through MusicKit, store the returned Music User Token as
+`APPLE_MUSIC_USER_TOKEN`, and set `APPLE_MUSIC_STOREFRONT` if it is not `us`. The
+Media ID and private key identify the app and sign developer tokens; they do not own
+the playlist. For Spotify, create a dedicated Spotify user, allowlist it on the
+current developer app, authorize it once with `playlist-modify-public`, and replace
+`SPOTIFY_REFRESH_TOKEN` with that user's refresh token. Keeping the existing app
+preserves the Client ID and avoids making listeners authorize a replacement app.
 
 Apple Music onboarding calls MusicKit directly using the existing MusicKit app
 credentials. It establishes a signed-in browser account only after the backend validates
@@ -353,19 +374,33 @@ identity cannot be replaced by reconnecting with a different provider account.
 Enabling publishing in production requires the Spotify redirect URI
 `https://listen.cx/account/spotify/callback` to be registered for the configured Spotify
 app and the provider secrets above. Deploying the current Worker requires all D1
-migrations through `0016_thread_collaboration_vote_limits.sql` first.
+migrations through `0017_service_owned_apple_playlists.sql` first.
 Migration `0013` preserves catalog rate-limit deadlines across Thread edits and retries.
+Migration `0017` does not delete old personal Apple playlists; listeners may remove
+those stale copies themselves after confirming the shared playlist is present. A
+Thread with an existing Apple subscriber transitions its legacy publishing target to
+service ownership, so the old owner-created playlist remains but stops receiving
+updates. Its legacy readback stays visible until the service replacement verifies,
+its edit restriction remains in place, and the replacement uses a separate Durable
+Object journal. Converted rows remain blocked behind database triggers so the old
+Worker cannot process or reopen them during the migration-before-deploy window. The
+new Worker activates them only after the Apple service credentials are available.
+The migration retains the prior publication and subscription state in
+`apple_service_migration_backups`; use `docs/apple-service-rollback.sql` before
+redeploying the old Worker if the service rollout must be reversed.
 The account routes, including `/settings`, require `ACCOUNT_SUBSCRIPTIONS_ENABLED`.
-Run the fail-fast rollout manually with `pnpm migrate:production && pnpm deploy:production`;
+Before production, provision the dedicated account grant in staging and verify an
+actual shared-playlist create, listener library add, and provider readback. Then run
+the fail-fast rollout manually with `pnpm migrate:production && pnpm deploy:production`;
 this repository forbids agent-executed production deployments.
 
 The encryption key is base64 encoding of 32 random bytes; preserve it across
 releases. Account credentials are encrypted in D1 with account-specific authenticated
 data. Provider subjects and session hashes never appear in public responses. Spotify
-refresh-token rotations are serialized and persisted before use. There is no fallback
-to shared publisher credentials for a personal subscription. Reauthorization cannot
-change the Spotify identity; Apple reauthorization checks preserved playlist journals
-and editable destinations, including unsubscribed copies.
+refresh-token rotations are serialized and persisted before use. Spotify personal
+subscriptions do not fall back to shared publisher credentials. Reauthorization
+cannot change the Spotify identity. Apple reauthorization only refreshes the listener
+library grant and does not claim ownership of the shared playlist.
 
 Staging reuses the registered `https://staging.listen.cx/auth/callback` Spotify URI.
 The separate staging authorization Worker forwards `account.` states to
@@ -378,12 +413,13 @@ HttpOnly, SameSite=Lax cookies on HTTPS; all mutations require same-origin JSON 
 The settings page alone permits MusicKit's external script and connections. Callback
 URLs are excluded from invocation logs and traces in staging.
 
-Provider readback is required before reporting a personal playlist synced. Background
-publishing updates the playlist; browser polling refreshes the displayed sync status
+Provider readback is required before reporting a playlist synced. Background
+publishing updates the canonical Apple or personal Spotify playlist; browser polling refreshes the displayed sync status
 without a page reload. Cross-provider matching runs before publication. If no confident
-match is found, the copy pauses and reports that some songs could not be matched.
-Refresh the song list to see matching results or retry sync to search again. Apple copies support additions; removing/reordering website songs or
-editing the provider playlist can pause their sync. Unsubscribe stops future work;
+match is found, the playlist pauses and reports that some songs could not be matched.
+Refresh the song list to see matching results or retry sync to search again. Shared
+Apple playlists support additions; removing/reordering website songs or editing the
+provider playlist can pause their sync. Unsubscribe stops listener library work;
 an already running provider request may still complete. Resubscribing reuses the
 existing destination rather than making a new playlist.
 

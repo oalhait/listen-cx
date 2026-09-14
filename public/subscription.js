@@ -18,21 +18,27 @@ export function playlistLink(subscription) {
 }
 
 export function subscriptionMessage(data) {
-  if (!data?.account) return 'Sign in to keep your own playlist updated.';
-  const provider = data.account.provider === 'spotify' ? 'Spotify' : data.account.provider === 'apple' ? 'Apple Music' : null;
-  if (!provider) return 'This music provider is not supported.';
-  if (!data.account.connected) return `Connect ${provider} in account settings to subscribe.`;
+  if (!data?.account) return 'Sign in to subscribe to shared playlists.';
+  const provider = data.account.provider;
+  const providerName = provider === 'spotify' ? 'Spotify' : provider === 'apple' ? 'Apple Music' : null;
+  if (!providerName) return 'This music provider is not supported.';
+  if (!data.account.connected) return `Connect ${providerName} in account settings to subscribe.`;
   const subscription = data.subscription;
-  if (!subscription?.connected) return `Subscribe to keep your own ${provider} playlist updated.`;
+  const playlist = provider === 'apple' ? 'The shared Apple Music playlist' : 'Your Spotify playlist';
+  if (!subscription?.connected) return provider === 'apple'
+    ? 'Subscribe to add the shared Apple Music playlist to your library.'
+    : 'Subscribe to keep your own Spotify playlist updated.';
   const code = subscription.blockedReason || subscription.failureCode;
-  if (code === 'matching_pending') return `Finding matching songs on ${provider}…`;
-  if (code === 'identities_incomplete') return `Some songs could not be matched on ${provider}. Your songs are saved in this Thread.`;
-  if (code === 'append_only' || code === 'apple_append_only') return 'Your Apple Music copy is paused because songs were removed or reordered. New songs can only be appended.';
-  if (code === 'provider_drift') return `Your ${provider} playlist changed outside this Thread. Sync is paused to protect those changes.`;
-  if (subscription.status === 'synced' && subscription.appliedRevision === subscription.requestedRevision && playlistLink(subscription)) return `Your ${provider} playlist is up to date.`;
-  if (subscription.status === 'blocked') return `Your ${provider} playlist needs attention. Check account settings, then retry.`;
-  if (subscription.status === 'failed') return `Your ${provider} playlist could not sync. You can retry.`;
-  return `Your ${provider} playlist is waiting to sync.`;
+  if (code === 'matching_pending') return `Finding matching songs on ${providerName}…`;
+  if (code === 'identities_incomplete') return `Some songs could not be matched on ${providerName}. Your songs are saved in this Thread.`;
+  if (code === 'append_only' || code === 'apple_append_only') return 'The shared Apple Music playlist is paused because songs were removed or reordered. New songs can only be appended.';
+  if (code === 'provider_drift') return `${playlist} changed outside this Thread. Sync is paused to protect those changes.`;
+  if (subscription.status === 'synced' && subscription.appliedRevision === subscription.requestedRevision && playlistLink(subscription)) {
+    return provider === 'apple' ? `${playlist} is in your library and up to date.` : `${playlist} is up to date.`;
+  }
+  if (subscription.status === 'blocked') return `${playlist} needs attention. Check account settings, then retry.`;
+  if (subscription.status === 'failed') return `${playlist} could not sync. You can retry.`;
+  return `${playlist} is waiting to sync.`;
 }
 
 export function providerSubscriptions(data) {
@@ -100,7 +106,7 @@ export function mountSubscription(root) {
   root.append(refresh);
   const note = document.createElement('p');
   note.className = 'thread-note';
-  note.textContent = 'Apple Music appends new songs. Removing or reordering songs can pause your Apple Music copy; this Thread stays editable.';
+  note.textContent = 'Apple Music appends new songs to the shared playlist. Removing or reordering songs can pause Apple Music sync; this Thread stays editable.';
   note.hidden = true;
   root.append(note);
   const controller = createSubscriptionController({
