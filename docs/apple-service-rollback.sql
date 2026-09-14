@@ -1,3 +1,5 @@
+UPDATE provider_service_migrations SET status = 'active' WHERE provider = 'apple';
+
 UPDATE thread_publications SET service_migration_pending = 0
 WHERE provider = 'apple' AND EXISTS (
   SELECT 1 FROM apple_service_migration_backups backup
@@ -64,4 +66,18 @@ WHERE provider = 'apple' AND EXISTS (
   WHERE backup.kind = 'subscription' AND backup.publisher_key = subscription.publisher_key
 );
 
-UPDATE provider_service_migrations SET status = 'active' WHERE provider = 'apple';
+UPDATE thread_publications AS publication SET
+  requested_revision = (SELECT revision FROM threads WHERE id = publication.thread_id),
+  status = 'pending', blocked_reason = NULL, failure_code = NULL, next_attempt_at = 0
+WHERE provider = 'apple' AND connected = 1
+  AND requested_revision < (SELECT revision FROM threads WHERE id = publication.thread_id)
+  AND EXISTS (SELECT 1 FROM apple_service_migration_backups backup
+    WHERE backup.kind = 'publication' AND backup.publisher_key = publication.publisher_key);
+
+UPDATE thread_subscriptions AS subscription SET
+  requested_revision = (SELECT revision FROM threads WHERE id = subscription.thread_id),
+  status = 'pending', blocked_reason = NULL, failure_code = NULL, next_attempt_at = 0
+WHERE provider = 'apple' AND connected = 1
+  AND requested_revision < (SELECT revision FROM threads WHERE id = subscription.thread_id)
+  AND EXISTS (SELECT 1 FROM apple_service_migration_backups backup
+    WHERE backup.kind = 'subscription' AND backup.publisher_key = subscription.publisher_key);
