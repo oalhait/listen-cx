@@ -16,6 +16,19 @@ it("requires an explicit enable flag and all publisher credentials", () => {
   expect(availablePublishers({ ...secrets, SPOTIFY_PUBLISHING_ENABLED: "true", PUBLISHER_ENCRYPTION_KEY: undefined })).toEqual([]);
 });
 
+it("accepts Apple service publishing with a user token and server-side developer-token signing", () => {
+  const configured = {
+    APPLE_PUBLISHING_ENABLED: "true",
+    APPLE_MUSIC_USER_TOKEN: "service-user",
+    APPLE_MUSIC_KEY_ID: "key",
+    APPLE_MUSIC_TEAM_ID: "team",
+    APPLE_MUSIC_PRIVATE_KEY_P8: "private",
+  };
+  expect(availablePublishers(configured)).toEqual(["apple"]);
+  expect(availablePublishers({ ...configured, APPLE_MUSIC_STOREFRONT: "gb" })).toEqual(["apple"]);
+  expect(availablePublishers({ ...configured, APPLE_MUSIC_STOREFRONT: "US" })).toEqual([]);
+});
+
 it.each(["key", btoa("k".repeat(16)), btoa("k".repeat(24)), btoa("k".repeat(33)), "!".repeat(44)])("rejects invalid encryption keys: %s", key => {
   expect(availablePublishers({ SPOTIFY_PUBLISHING_ENABLED: "true", SPOTIFY_CLIENT_ID: "id", SPOTIFY_CLIENT_SECRET: "secret", SPOTIFY_REFRESH_TOKEN: "refresh", PUBLISHER_ENCRYPTION_KEY: key })).toEqual([]);
 });

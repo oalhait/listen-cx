@@ -11,7 +11,13 @@ export interface PublicationTarget {
   status: PublicationStatus["status"];
   appliedRevision: number | null;
   requestedRevision: number;
+  verifiedPlaylistId: string | null;
+  verifiedPlaylistUrl: string | null;
 }
+
+export type CanonicalPublication = Pick<PublicationTarget, "provider" | "status" | "appliedRevision" | "requestedRevision" | "verifiedPlaylistId" | "verifiedPlaylistUrl"> & {
+  connected: boolean;
+};
 
 export function isPlaylistUrl(provider: Provider, id: string, value: string): boolean {
   try {
@@ -43,20 +49,30 @@ export class D1PublicationStore {
   private targets() {
     return `SELECT p.publisher_key AS publisherKey, t.public_capability AS capability,
       p.provider, p.next_attempt_at AS nextAttemptAt, p.account_id AS accountId,
-      p.status, p.applied_revision AS appliedRevision, p.requested_revision AS requestedRevision
+      p.status, p.applied_revision AS appliedRevision, p.requested_revision AS requestedRevision,
+      p.verified_playlist_id AS verifiedPlaylistId, p.verified_playlist_url AS verifiedPlaylistUrl,
+      p.service_ready AS serviceReady
       FROM (
         SELECT publisher_key, thread_id, provider, MAX(next_attempt_at, rate_limit_until) AS next_attempt_at, NULL AS account_id,
-          status, applied_revision, requested_revision, connected FROM thread_publications
+          status, applied_revision, requested_revision, verified_playlist_id, verified_playlist_url, connected, 1 AS service_ready
+          FROM thread_publications
         UNION ALL
         SELECT publisher_key, thread_id, provider, MAX(next_attempt_at, rate_limit_until) AS next_attempt_at, account_id,
-          status, applied_revision, requested_revision, connected FROM thread_subscriptions
+          status, applied_revision, requested_revision, verified_playlist_id, verified_playlist_url, connected,
+          CASE WHEN provider != 'apple' OR EXISTS (
+            SELECT 1 FROM thread_publications service WHERE service.thread_id = thread_subscriptions.thread_id
+              AND service.provider = thread_subscriptions.provider AND service.connected = 1
+              AND service.status = 'synced' AND service.applied_revision = thread_subscriptions.requested_revision
+          ) THEN 1 ELSE 0 END AS service_ready
+          FROM thread_subscriptions
       ) p JOIN threads t ON t.id = p.thread_id`;
   }
 
   async due(capability?: string): Promise<PublicationTarget[]> {
     const result = await this.db.withSession("first-primary").prepare(`${this.targets()}
       WHERE p.connected = 1 AND p.status IN ('pending', 'failed') AND p.next_attempt_at <= ?
-      AND (? IS NULL OR t.public_capability = ?) ORDER BY p.next_attempt_at, p.thread_id, p.publisher_key LIMIT 20`)
+      AND p.service_ready = 1 AND (? IS NULL OR t.public_capability = ?)
+      ORDER BY p.next_attempt_at, p.thread_id, p.publisher_key LIMIT 20`)
       .bind(Date.now(), capability ?? null, capability ?? null).all<PublicationTarget>();
     return result.results;
   }
@@ -64,6 +80,15 @@ export class D1PublicationStore {
   async target(publisherKey: string, includeDisconnected = false): Promise<PublicationTarget | null> {
     return this.db.withSession("first-primary").prepare(`${this.targets()}
       WHERE p.publisher_key = ? AND (p.connected = 1 OR ? = 1)`).bind(publisherKey, includeDisconnected ? 1 : 0).first<PublicationTarget>();
+  }
+
+  async canonical(capability: string, provider: Provider): Promise<CanonicalPublication | null> {
+    const row = await this.db.withSession("first-primary").prepare(`SELECT p.provider, p.connected, p.status,
+      p.applied_revision AS appliedRevision, p.requested_revision AS requestedRevision,
+      p.verified_playlist_id AS verifiedPlaylistId, p.verified_playlist_url AS verifiedPlaylistUrl
+      FROM thread_publications p JOIN threads t ON t.id = p.thread_id
+      WHERE t.public_capability = ? AND p.provider = ?`).bind(capability, provider).first<Omit<CanonicalPublication, "connected"> & { connected: number }>();
+    return row ? { ...row, connected: row.connected === 1 } : null;
   }
 
   async verified(publisherKey: string, revision: number, playlistId: string, playlistUrl: string): Promise<void> {
@@ -75,8 +100,8 @@ export class D1PublicationStore {
       blocked_reason = NULL, failure_code = NULL, next_attempt_at = 0
       WHERE publisher_key = ? AND connected = 1 AND requested_revision >= ?
       AND (applied_revision IS NULL OR applied_revision <= ?)
-      AND (verified_playlist_id IS NULL OR verified_playlist_id = ?)`)
-      .bind(revision, playlistId, playlistUrl, revision, publisherKey, revision, revision, playlistId).run();
+      AND (? = 1 OR verified_playlist_id IS NULL OR verified_playlist_id = ?)`)
+      .bind(revision, playlistId, playlistUrl, revision, publisherKey, revision, revision, target.accountId ? 1 : 0, playlistId).run();
   }
 
   async failed(publisherKey: string, revision: number, code: string, blocked: boolean, nextAttemptAt: number): Promise<void> {

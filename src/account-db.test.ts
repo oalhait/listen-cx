@@ -76,6 +76,33 @@ it("queues one service-owned Apple publication before listener library subscript
   expect(targets[0]).toMatchObject({ accountId: null, provider: "apple", status: "pending" });
 });
 
+it("migrates existing Apple subscribers away from personal playlist destinations", async () => {
+  const accounts = new D1AccountStore(env.DB);
+  const thread = await new D1ThreadStore(env.DB).create("Existing Apple copy", nanoid(22));
+  const account = await accounts.upsert("apple", "existing-apple-listener", "Listener");
+  const subscription = await accounts.subscribe(account.id, thread.publicCapability);
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE thread_publications SET connected = 0, status = 'blocked', blocked_reason = 'publisher_not_authorized'
+      WHERE provider = 'apple' AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
+      .bind(thread.publicCapability),
+    env.DB.prepare(`UPDATE thread_subscriptions SET status = 'synced', applied_revision = 0,
+      verified_playlist_id = 'p.personal', verified_playlist_url = 'https://music.apple.com/us/playlist/personal/pl.personal'
+      WHERE publisher_key = ?`).bind(subscription.publisherKey),
+  ]);
+
+  const migration = env.TEST_MIGRATIONS.find(value => value.name.includes("0014"))!;
+  expect(migration).toBeDefined();
+  await env.DB.batch(migration.queries.map(query => env.DB.prepare(query)));
+
+  expect(await new D1PublicationStore(env.DB).canonical(thread.publicCapability, "apple")).toMatchObject({
+    connected: true, status: "pending", verifiedPlaylistId: null,
+  });
+  expect(await accounts.subscription(account.id, thread.publicCapability)).toMatchObject({
+    connected: true, status: "pending", appliedRevision: 0,
+    verifiedPlaylistId: "p.personal", verifiedPlaylistUrl: "https://music.apple.com/us/playlist/personal/pl.personal",
+  });
+});
+
 it("queues connected subscribers on revisions and reuses a disconnected destination when resubscribed", async () => {
   const store = new D1AccountStore(env.DB);
   const thread = await new D1ThreadStore(env.DB).create("Together", nanoid(22));
