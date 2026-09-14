@@ -113,3 +113,23 @@ it("does not reset Apple listeners when a manager retries Spotify", async () => 
     status: "blocked", blockedReason: "publisher_not_authorized",
   });
 });
+
+it("does not treat a legacy personal Apple publication as the shared playlist", async () => {
+  const threads = new D1ThreadStore(env.DB);
+  const publications = new D1PublicationStore(env.DB);
+  const secret = nanoid(22);
+  const view = await threads.create("Legacy personal Apple playlist", secret);
+  const auth = (await authorizeManagementCapability(threads, view.publicCapability, secret))!;
+  await threads.manage(auth, { kind: "connect", provider: "apple", expectedRevision: 0, requestKey: "connect" });
+
+  expect(await publications.canonical(view.publicCapability, "apple")).toBeNull();
+
+  const account = await new D1AccountStore(env.DB).upsert("apple", "legacy-filter-listener", "Listener");
+  const subscription = await new D1AccountStore(env.DB).subscribe(account.id, view.publicCapability);
+  await env.DB.prepare(`UPDATE thread_publications SET service_owned = 0
+    WHERE provider = 'apple' AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
+    .bind(view.publicCapability).run();
+
+  expect((await publications.due(view.publicCapability)).find(target => target.publisherKey === subscription.publisherKey))
+    .toBeUndefined();
+});

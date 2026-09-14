@@ -377,12 +377,14 @@ app and the provider secrets above. Deploying the current Worker requires all D1
 migrations through `0017_service_owned_apple_playlists.sql` first.
 Migration `0013` preserves catalog rate-limit deadlines across Thread edits and retries.
 Migration `0014` does not delete old personal Apple playlists; listeners may remove
-those stale copies themselves after confirming the shared playlist is present. It
-marks the replacement destination as service-owned, keeps its legacy readback visible
-until the replacement verifies, and uses a separate Durable Object journal. Converted
-rows remain blocked and disconnected so the old Worker cannot process them during the
-migration-before-deploy window. The new Worker activates them only after the Apple
-service credentials are available.
+those stale copies themselves after confirming the shared playlist is present. A
+Thread with an existing Apple subscriber transitions its legacy publishing target to
+service ownership, so the old owner-created playlist remains but stops receiving
+updates. Its legacy readback stays visible until the service replacement verifies,
+its edit restriction remains in place, and the replacement uses a separate Durable
+Object journal. Converted rows remain blocked behind database triggers so the old
+Worker cannot process or reopen them during the migration-before-deploy window. The
+new Worker activates them only after the Apple service credentials are available.
 The account routes, including `/settings`, require `ACCOUNT_SUBSCRIPTIONS_ENABLED`.
 Before production, provision the dedicated account grant in staging and verify an
 actual shared-playlist create, listener library add, and provider readback. Then run

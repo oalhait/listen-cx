@@ -26,7 +26,7 @@ const decode = (value: string) => Uint8Array.from(atob(value), character => char
 
 export async function wakeDue(env: RuntimeEnv, capability?: string): Promise<void> {
   const publications = new D1PublicationStore(env.DB);
-  if (availablePublishers(env).includes("apple")) await publications.activateAppleServicePublications(capability);
+  if (availablePublishers(env).includes("apple")) await publications.activateAppleServicePublications();
   const targets = await publications.due(capability);
   const results = await Promise.allSettled(targets.map(target => env.THREAD_PUBLISHER.getByName(target.publisherKey).wake(target.publisherKey)));
   if (results.some(result => result.status === "rejected")) throw new Error("publisher_wake_failed");
@@ -157,12 +157,13 @@ export class ThreadPublisher extends DurableObject<RuntimeEnv> {
   }
 
   async #appleDeveloperToken(): Promise<string> {
-    if (this.#appleToken && this.#appleToken.expiresAt > Date.now() + 60_000) return this.#appleToken.value;
+    if (this.#appleToken && this.#appleToken.expiresAt > Date.now() + 120_000) return this.#appleToken.value;
     if (this.#appleTokenRefresh) return this.#appleTokenRefresh;
+    const issuedAt = Date.now();
     this.#appleTokenRefresh = signAppleDeveloperToken({
       keyId: this.env.APPLE_MUSIC_KEY_ID!, teamId: this.env.APPLE_MUSIC_TEAM_ID!, privateKey: this.env.APPLE_MUSIC_PRIVATE_KEY_P8!,
     }).then(value => {
-      this.#appleToken = { value, expiresAt: Date.now() + 15 * 60_000 };
+      this.#appleToken = { value, expiresAt: issuedAt + 15 * 60_000 };
       return value;
     });
     try { return await this.#appleTokenRefresh; }

@@ -1,10 +1,11 @@
 import { env } from "cloudflare:workers";
 import { nanoid } from "nanoid";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { D1AccountStore } from "./account-db.js";
 import { D1PublicationStore } from "./publication-db.js";
 import { D1ThreadStore } from "./thread-db.js";
 import { authorizeManagementCapability } from "./thread-security.js";
+import { runLibrarySubscription, runPublication } from "./publication-runner.js";
 
 it("keeps provider accounts separate and preserves credentials unless explicitly replaced", async () => {
   const store = new D1AccountStore(env.DB);
@@ -99,7 +100,8 @@ it("keeps Thread removal available after an Apple listener subscribes", async ()
 
 it("migrates existing Apple subscribers away from personal playlist destinations", async () => {
   const accounts = new D1AccountStore(env.DB);
-  const thread = await new D1ThreadStore(env.DB).create("Existing Apple copy", nanoid(22));
+  const threads = new D1ThreadStore(env.DB);
+  const thread = await threads.create("Existing Apple copy", nanoid(22));
   const account = await accounts.upsert("apple", "existing-apple-listener", "Listener");
   const subscription = await accounts.subscribe(account.id, thread.publicCapability);
   await env.DB.batch([
@@ -113,18 +115,29 @@ it("migrates existing Apple subscribers away from personal playlist destinations
       WHERE publisher_key = ?`).bind(subscription.publisherKey),
   ]);
 
-  const migration = env.TEST_MIGRATIONS.find(value => value.name.includes("0014"))!;
-  expect(migration).toBeDefined();
-  await env.DB.batch(migration.queries.slice(2).map(query => env.DB.prepare(query)));
+  await env.DB.prepare("UPDATE provider_service_migrations SET status = 'pending' WHERE provider = 'apple'").run();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE thread_publications SET edit_locked = 1 WHERE provider = 'apple' AND connected = 1"),
+    env.DB.prepare(`UPDATE thread_publications SET connected = 1, service_owned = 1, service_migration_pending = 1,
+      service_replacement_pending = CASE WHEN verified_playlist_id IS NULL THEN 0 ELSE 1 END,
+      status = 'blocked', blocked_reason = 'service_migration_pending', failure_code = NULL,
+      next_attempt_at = 32503680000000 WHERE provider = 'apple' AND EXISTS (
+        SELECT 1 FROM thread_subscriptions subscription WHERE subscription.thread_id = thread_publications.thread_id
+          AND subscription.provider = 'apple' AND subscription.connected = 1)`),
+    env.DB.prepare(`UPDATE thread_subscriptions SET service_migration_pending = 1, status = 'blocked',
+      blocked_reason = 'service_migration_pending', failure_code = NULL, next_attempt_at = 32503680000000
+      WHERE provider = 'apple' AND connected = 1`),
+  ]);
 
   expect(await new D1PublicationStore(env.DB).canonical(thread.publicCapability, "apple")).toMatchObject({
-    connected: false, status: "blocked", verifiedPlaylistId: "p.owner",
+    connected: true, status: "blocked", verifiedPlaylistId: "p.owner",
   });
   const publications = new D1PublicationStore(env.DB);
-  expect((await publications.target(
-    (await env.DB.prepare(`SELECT publisher_key FROM thread_publications WHERE provider = 'apple'
-      AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`).bind(thread.publicCapability).first<string>("publisher_key"))!, true,
-  ))).toMatchObject({ serviceOwned: true });
+  const publisherKey = (await env.DB.prepare(`SELECT publisher_key FROM thread_publications WHERE provider = 'apple'
+    AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
+    .bind(thread.publicCapability).first<string>("publisher_key"))!;
+  expect(await publications.target(publisherKey, true)).toMatchObject({ serviceOwned: true,
+    serviceReplacementPending: true, nextAttemptAt: 32503680000000 });
   expect(await accounts.subscription(account.id, thread.publicCapability)).toMatchObject({
     connected: true, status: "blocked", blockedReason: "service_migration_pending", appliedRevision: 0,
     verifiedPlaylistId: "p.personal", verifiedPlaylistUrl: "https://music.apple.com/us/playlist/personal/pl.personal",
@@ -133,10 +146,32 @@ it("migrates existing Apple subscribers away from personal playlist destinations
     .toMatchObject({ editLocked: true });
   expect(await publications.due(thread.publicCapability)).toEqual([]);
 
-  await publications.activateAppleServicePublications(thread.publicCapability);
+  await env.DB.prepare("UPDATE threads SET revision = revision + 1 WHERE public_capability = ?")
+    .bind(thread.publicCapability).run();
+  await accounts.requeueSubscriptions(account.id, "apple");
+  await accounts.retry(account.id, thread.publicCapability);
+  await accounts.subscribe(account.id, thread.publicCapability);
+  const publish = vi.fn();
+  const add = vi.fn();
+  expect(await runPublication(env.DB, publisherKey, { apple: publish })).toBe(32503680000000);
+  expect(await runLibrarySubscription(env.DB, subscription.publisherKey, add)).toBe(32503680000000);
+  expect(publish).not.toHaveBeenCalled();
+  expect(add).not.toHaveBeenCalled();
 
-  expect(await publications.canonical(thread.publicCapability, "apple")).toMatchObject({ connected: true, status: "pending" });
-  expect(await accounts.subscription(account.id, thread.publicCapability)).toMatchObject({ status: "pending", blockedReason: null });
+  await publications.activateAppleServicePublications();
+
+  expect(await publications.canonical(thread.publicCapability, "apple")).toMatchObject({
+    connected: true, status: "pending", requestedRevision: 1,
+  });
+  expect(await accounts.subscription(account.id, thread.publicCapability)).toMatchObject({
+    connected: true, status: "pending", blockedReason: null, requestedRevision: 1,
+  });
+
+  await publications.verified(publisherKey, 1, "p.service", "https://music.apple.com/us/playlist/service/pl.service");
+  await publications.verified(publisherKey, 1, "p.other", "https://music.apple.com/us/playlist/other/pl.other");
+  expect(await publications.canonical(thread.publicCapability, "apple")).toMatchObject({
+    verifiedPlaylistId: "p.service", verifiedPlaylistUrl: "https://music.apple.com/us/playlist/service/pl.service",
+  });
 });
 
 it("does not let repeated Apple subscribe clear a shared publication block", async () => {

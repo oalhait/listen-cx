@@ -139,6 +139,7 @@ export class D1AccountStore {
         failure_code = NULL, updated_at = datetime('now') WHERE thread_subscriptions.connected = 0`)
         .bind(crypto.randomUUID(), accountId, capability),
       db.prepare(`UPDATE thread_publications SET connected = 1, service_owned = 1, status = 'pending',
+        service_replacement_pending = CASE WHEN verified_playlist_id IS NULL THEN 0 ELSE 1 END,
         blocked_reason = NULL, failure_code = NULL, next_attempt_at = 0
         WHERE provider = 'apple' AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)
         AND service_owned = 0 AND EXISTS (SELECT 1 FROM accounts WHERE id = ? AND provider = 'apple')`)

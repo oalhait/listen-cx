@@ -12,4 +12,5 @@ declare global {
 
 beforeAll(async () => {
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
+  await env.DB.prepare("UPDATE provider_service_migrations SET status = 'active' WHERE provider = 'apple'").run();
 });
