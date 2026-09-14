@@ -377,9 +377,15 @@ app and the provider secrets above. Deploying the current Worker requires all D1
 migrations through `0017_service_owned_apple_playlists.sql` first.
 Migration `0013` preserves catalog rate-limit deadlines across Thread edits and retries.
 Migration `0014` does not delete old personal Apple playlists; listeners may remove
-those stale copies themselves after confirming the shared playlist is present.
+those stale copies themselves after confirming the shared playlist is present. It
+marks the replacement destination as service-owned, keeps its legacy readback visible
+until the replacement verifies, uses a separate Durable Object journal, and delays
+the first attempt for five minutes so the old Worker cannot process the converted row
+during the migration-before-deploy window.
 The account routes, including `/settings`, require `ACCOUNT_SUBSCRIPTIONS_ENABLED`.
-Run the fail-fast rollout manually with `pnpm migrate:production && pnpm deploy:production`;
+Before production, provision the dedicated account grant in staging and verify an
+actual shared-playlist create, listener library add, and provider readback. Then run
+the fail-fast rollout manually with `pnpm migrate:production && pnpm deploy:production`;
 this repository forbids agent-executed production deployments.
 
 The encryption key is base64 encoding of 32 random bytes; preserve it across

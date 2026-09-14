@@ -101,7 +101,8 @@ export class ThreadPublisher extends DurableObject<RuntimeEnv> {
     } else {
       this.#operationBusy = true;
       try {
-        retryAt = await runPublication(this.env.DB, publisherKey, this.#publishers(publisherKey, target.accountId, target.provider), this.#identityResolver(publisherKey, target.accountId));
+        retryAt = await runPublication(this.env.DB, publisherKey, this.#publishers(publisherKey, target.accountId, target.provider, target.serviceOwned),
+          this.#identityResolver(publisherKey, target.accountId, target.serviceOwned));
         if (target.provider === "apple" && !target.accountId && retryAt === null) await wakeDue(this.env, target.capability);
       }
       finally { this.#operationBusy = false; }
@@ -143,19 +144,6 @@ export class ThreadPublisher extends DurableObject<RuntimeEnv> {
       await accounts.setCredentials(accountId, JSON.stringify(await seal(this.env.PUBLISHER_ENCRYPTION_KEY!, `account:${accountId}`, { ...credentials, tokens })));
       return tokens.accessToken;
     });
-  }
-
-  async getOptionalAccountSpotifyToken(accountId: string): Promise<string | null> {
-    try { return await this.getAccountSpotifyToken(accountId); }
-    catch (error) {
-      if (error instanceof MusicAuthError && error.status === 401) return null;
-      throw error;
-    }
-  }
-
-  async getAccountAppleCredentials(accountId: string): Promise<ApplePublishingCredentials> {
-    this.#accountStore(accountId);
-    return this.#serializeAccount(() => this.#readAccountAppleCredentials(accountId));
   }
 
   async #readAccountAppleCredentials(accountId: string): Promise<ApplePublishingCredentials> {
@@ -200,7 +188,7 @@ export class ThreadPublisher extends DurableObject<RuntimeEnv> {
       const target = await new D1PublicationStore(this.env.DB).target(publisherKey);
       if (!target) return null;
       if (target.accountId !== accountId || target.provider !== "apple") throw new MusicAuthError("authorization_required", 401);
-      const subscriber = new AppleLibrarySubscriber({ credentials, storefront: credentials.storefront ?? "us" });
+      const subscriber = new AppleLibrarySubscriber({ credentials });
       return await runLibrarySubscription(this.env.DB, publisherKey, input => subscriber.reconcile({
         playlistUrl: input.playlistUrl,
         previousPlaylistUrl: input.previousPlaylistUrl,
@@ -218,6 +206,7 @@ export class ThreadPublisher extends DurableObject<RuntimeEnv> {
       await accounts.setCredentials(accountId, JSON.stringify(await seal(this.env.PUBLISHER_ENCRYPTION_KEY!, `account:${accountId}`, {
         teamId: this.env.APPLE_MUSIC_TEAM_ID!, musicUserToken, storefront,
       } satisfies AppleAccountCredentials)));
+      await accounts.requeueSubscriptions(accountId, "apple");
     });
   }
 
@@ -254,22 +243,19 @@ export class ThreadPublisher extends DurableObject<RuntimeEnv> {
     return tokens.accessToken;
   }
 
-  #identityResolver(publisherKey: string, accountId: string | null): IdentityResolver {
+  #identityResolver(publisherKey: string, accountId: string | null, serviceOwned: boolean): IdentityResolver {
     return async (view, target) => {
       const service = availablePublishers(this.env);
       let spotifyAccessToken: string | undefined;
       if (target.provider === "spotify") {
         if (accountId) spotifyAccessToken = await this.env.THREAD_PUBLISHER.getByName(`account_${accountId}`).getAccountSpotifyToken(accountId);
-        else if (service.includes("spotify")) spotifyAccessToken = await this.env.THREAD_PUBLISHER.getByName(credentialKey).spotifyAccessToken();
         else if (availableConnections(this.env).includes("spotify")) spotifyAccessToken = await this.#connections(publisherKey).spotifyAccessToken();
-      } else if (accountId) {
-        const spotify = (await new D1AccountStore(this.env.DB).connections(accountId)).find(account => account.provider === "spotify" && account.credentials);
-        if (spotify) spotifyAccessToken = await this.env.THREAD_PUBLISHER.getByName(`account_${spotify.id}`).getOptionalAccountSpotifyToken(spotify.id) ?? undefined;
+        else if (service.includes("spotify")) spotifyAccessToken = await this.env.THREAD_PUBLISHER.getByName(credentialKey).spotifyAccessToken();
       }
       const developerToken = this.env.APPLE_DEVELOPER_TOKEN
         ?? (this.env.APPLE_MUSIC_KEY_ID && this.env.APPLE_MUSIC_TEAM_ID && this.env.APPLE_MUSIC_PRIVATE_KEY_P8 ? await this.#appleDeveloperToken() : undefined);
       let storefront = this.env.APPLE_MUSIC_STOREFRONT ?? "us";
-      if (target.provider === "apple" && !service.includes("apple") && availableConnections(this.env).includes("apple")) {
+      if (target.provider === "apple" && !serviceOwned && availableConnections(this.env).includes("apple")) {
         storefront = (await this.#connections(publisherKey).appleCredentials()).storefront;
       }
       const catalog = new MusicCatalog({ appleDeveloperToken: developerToken, spotifyAccessToken });
@@ -287,18 +273,18 @@ export class ThreadPublisher extends DurableObject<RuntimeEnv> {
     };
   }
 
-  #publishers(publisherKey: string, accountId: string | null = null, accountProvider?: Provider): ProviderPublishers {
+  #publishers(publisherKey: string, accountId: string | null = null, accountProvider?: Provider, serviceOwned = false): ProviderPublishers {
     const publishers: ProviderPublishers = {};
     const personal = availableConnections(this.env);
     const service = availablePublishers(this.env);
-    const available = accountId ? (accountProvider ? [accountProvider] : [])
+    const available = accountId ? (accountProvider === "spotify" ? ["spotify" as const] : [])
       : [...new Set([...service, ...personal])];
     if (available.includes("spotify")) {
       const publisher = new SpotifyPublisher({
         accessToken: () => {
           if (accountId) return this.env.THREAD_PUBLISHER.getByName(`account_${accountId}`).getAccountSpotifyToken(accountId);
-          if (service.includes("spotify")) return this.env.THREAD_PUBLISHER.getByName(credentialKey).spotifyAccessToken();
           if (personal.includes("spotify")) return this.#connections(publisherKey).spotifyAccessToken();
+          if (service.includes("spotify")) return this.env.THREAD_PUBLISHER.getByName(credentialKey).spotifyAccessToken();
           return Promise.reject(new PublishingError("authorization_required", 401));
         },
         store: { get: key => this.ctx.storage.get<SpotifyDestination>(`spotify:${key}`),
@@ -319,16 +305,15 @@ export class ThreadPublisher extends DurableObject<RuntimeEnv> {
     if (available.includes("apple")) {
       const publisher = new ApplePublisher({
         credentials: async () => {
-          if (accountId) throw new MusicAuthError("authorization_required", 401);
-          if (service.includes("apple")) return {
+          if (serviceOwned && service.includes("apple")) return {
             developerToken: this.env.APPLE_DEVELOPER_TOKEN ?? await this.#appleDeveloperToken(),
             musicUserToken: this.env.APPLE_MUSIC_USER_TOKEN!,
           };
-          if (personal.includes("apple")) return this.#connections(publisherKey).appleCredentials();
+          if (!serviceOwned && personal.includes("apple")) return this.#connections(publisherKey).appleCredentials();
           throw new MusicAuthError("authorization_required", 401);
         },
-        store: { get: key => this.ctx.storage.get<AppleDestination>(`apple:${key}`),
-          set: (key, value) => this.ctx.storage.put(`apple:${key}`, value) },
+        store: { get: key => this.ctx.storage.get<AppleDestination>(`${serviceOwned ? "apple-service" : "apple"}:${key}`),
+          set: (key, value) => this.ctx.storage.put(`${serviceOwned ? "apple-service" : "apple"}:${key}`, value) },
       });
       publishers.apple = async input => {
         const result = await publisher.reconcile(input);

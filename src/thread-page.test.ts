@@ -67,6 +67,13 @@ it("hides removal and ordering after Apple connects while preserving additions a
   expect(page).toContain("Apple Music is connected, so songs cannot be removed or reordered");
 });
 
+it("keeps removal and ordering available for a service-owned Apple playlist", () => {
+  const page = threadPage({ ...view, publications: view.publications.map(p => ({ ...p, connected: true, serviceOwned: true })) }, true);
+  expect(page).toContain('data-remove=');
+  expect(page).toContain('data-move=');
+  expect(page).not.toContain("Apple Music is connected, so songs cannot be removed or reordered");
+});
+
 it("distinguishes pending, failed, unresolved, and verified sync without exposing internal errors", () => {
   const publication = { ...view.publications[0]!, connected: true };
   const page = (patch: Partial<typeof publication>) => threadPage({ ...view, publications: [{ ...publication, ...patch }] }, false);

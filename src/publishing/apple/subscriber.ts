@@ -2,15 +2,15 @@ import { PublishingError } from "./publisher.js";
 
 type Credentials = { developerToken: string; musicUserToken: string };
 type Input = { playlistUrl: string; previousPlaylistUrl: string | null };
-type Options = { credentials: Credentials; storefront: string; fetcher?: typeof fetch };
+type Options = { credentials: Credentials; fetcher?: typeof fetch };
 const maxResponseBytes = 64 * 1024;
 
-function catalogPlaylistId(value: string): string {
+function catalogPlaylist(value: string): { id: string; storefront: string } {
   try {
     const url = new URL(value);
     const match = url.pathname.match(/^\/[a-z]{2}\/playlist\/(?:[^/]+\/)?(pl\.[A-Za-z0-9.-]+)\/?$/);
     if (url.protocol !== "https:" || url.hostname !== "music.apple.com" || url.port || url.username || url.password || url.hash || !match) throw new Error();
-    return match[1]!;
+    return { id: match[1]!, storefront: url.pathname.split("/")[1]! };
   } catch { throw new PublishingError("invalid_publication_readback", 502); }
 }
 
@@ -22,20 +22,19 @@ export class AppleLibrarySubscriber {
   }
 
   async reconcile(input: Input): Promise<{ playlistId: string; playlistUrl: string }> {
-    const catalogId = catalogPlaylistId(input.playlistUrl);
-    let libraryId: string | null = null;
-    if (input.previousPlaylistUrl === input.playlistUrl) libraryId = await this.libraryId(catalogId);
+    const playlist = catalogPlaylist(input.playlistUrl);
+    let libraryId = await this.libraryId(playlist.id, playlist.storefront);
     if (!libraryId) {
-      const query = new URLSearchParams({ "ids[playlists]": catalogId });
+      const query = new URLSearchParams({ "ids[playlists]": playlist.id });
       await this.request(`/v1/me/library?${query}`, "POST");
-      libraryId = await this.libraryId(catalogId);
+      libraryId = await this.libraryId(playlist.id, playlist.storefront);
     }
     if (!libraryId) throw new PublishingError("readback_mismatch", 502);
     return { playlistId: libraryId, playlistUrl: input.playlistUrl };
   }
 
-  private async libraryId(catalogId: string): Promise<string | null> {
-    const response = await this.request(`/v1/catalog/${encodeURIComponent(this.options.storefront)}/playlists/${catalogId}/library`);
+  private async libraryId(catalogId: string, storefront: string): Promise<string | null> {
+    const response = await this.request(`/v1/catalog/${storefront}/playlists/${catalogId}/library`);
     if (!Array.isArray(response?.data) || response.data.length > 1) throw new PublishingError("invalid_provider_response", 502);
     if (response.data.length === 0) return null;
     const item = response.data[0];

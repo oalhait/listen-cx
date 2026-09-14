@@ -138,17 +138,22 @@ export class D1AccountStore {
         requested_revision = excluded.requested_revision, status = 'pending', blocked_reason = NULL,
         failure_code = NULL, updated_at = datetime('now') WHERE thread_subscriptions.connected = 0`)
         .bind(crypto.randomUUID(), accountId, capability),
-      db.prepare(`UPDATE thread_publications SET connected = 1,
-        status = CASE WHEN status = 'synced' AND applied_revision = requested_revision THEN status ELSE 'pending' END,
+      db.prepare(`UPDATE thread_publications SET connected = 1, service_owned = 1, status = 'pending',
         blocked_reason = NULL, failure_code = NULL, next_attempt_at = 0
         WHERE provider = 'apple' AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)
-        AND EXISTS (SELECT 1 FROM accounts WHERE id = ? AND provider = 'apple')`)
+        AND service_owned = 0 AND EXISTS (SELECT 1 FROM accounts WHERE id = ? AND provider = 'apple')`)
         .bind(capability, accountId),
     ]);
     const row = await db.prepare(`${subscriptionSelect} WHERE s.account_id = ? AND t.public_capability = ?`)
       .bind(accountId, capability).first<SubscriptionRow>();
     if (!row) throw new ThreadError(404, "not_found", "Account or Thread not found.");
     return { ...row, connected: row.connected === 1 };
+  }
+
+  async requeueSubscriptions(accountId: string, provider: Provider): Promise<void> {
+    await this.db.withSession("first-primary").prepare(`UPDATE thread_subscriptions SET status = 'pending',
+      blocked_reason = NULL, failure_code = NULL, next_attempt_at = 0, updated_at = datetime('now')
+      WHERE account_id = ? AND provider = ? AND connected = 1`).bind(accountId, provider).run();
   }
 
   async subscription(accountId: string, capability: string): Promise<Subscription | null> {

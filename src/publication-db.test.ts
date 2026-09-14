@@ -4,6 +4,7 @@ import { nanoid } from "nanoid";
 import { D1ThreadStore } from "./thread-db.js";
 import { D1PublicationStore } from "./publication-db.js";
 import { authorizeManagementCapability } from "./thread-security.js";
+import { D1AccountStore } from "./account-db.js";
 
 it("keeps newer revisions pending when an earlier provider readback completes", async () => {
   const threads = new D1ThreadStore(env.DB);
@@ -70,4 +71,25 @@ it("lets a manager retry a closed Thread publication without bypassing a provide
   expect(current.revision).toBe(2);
   expect(current.publications.find(p => p.provider === "spotify")!.status).toBe("pending");
   expect((await publications.target(target!.publisherKey))!.nextAttemptAt).toBe(retryAt);
+});
+
+it("propagates a shared Apple publication block to listeners and resets both on manager retry", async () => {
+  const threads = new D1ThreadStore(env.DB);
+  const publications = new D1PublicationStore(env.DB);
+  const accounts = new D1AccountStore(env.DB);
+  const secret = nanoid(22);
+  const view = await threads.create("Shared failure", secret);
+  const auth = (await authorizeManagementCapability(threads, view.publicCapability, secret))!;
+  const account = await accounts.upsert("apple", "shared-failure-listener", "Listener");
+  const subscription = await accounts.subscribe(account.id, view.publicCapability);
+  const target = (await publications.due(view.publicCapability)).find(item => !item.accountId && item.provider === "apple")!;
+
+  await publications.failed(target.publisherKey, 0, "publisher_not_authorized", true, 0);
+
+  expect(await accounts.subscription(account.id, view.publicCapability)).toMatchObject({
+    publisherKey: subscription.publisherKey, status: "blocked", blockedReason: "publisher_not_authorized",
+  });
+  await publications.retry(auth, "apple");
+  expect(await publications.canonical(view.publicCapability, "apple")).toMatchObject({ status: "pending" });
+  expect(await accounts.subscription(account.id, view.publicCapability)).toMatchObject({ status: "pending", blockedReason: null });
 });

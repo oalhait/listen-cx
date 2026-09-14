@@ -209,6 +209,8 @@ it("repairs drift after an adapter checkpoint without creating a second Spotify 
 
 it("publishes Apple only after the provider returns a public URL and exact catalog track readback", async () => {
   const f = await setup("apple");
+  await env.DB.prepare(`UPDATE thread_publications SET service_owned = 1 WHERE provider = 'apple'
+    AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`).bind(f.cap).run();
   await configure(f.stub, { ...await applePublishingSecrets(), APPLE_MUSIC_USER_TOKEN: "private-user" });
   let marker = "";
   let reads = 0;
@@ -240,7 +242,9 @@ it("publishes Apple only after the provider returns a public URL and exact catal
   expect([...developerTokens]).toHaveLength(1);
   expect([...developerTokens][0]).toMatch(/^Bearer ey/);
   await runInDurableObject(f.stub, async (_, state) => {
-    expect(JSON.stringify([...await state.storage.list()])).not.toContain("private-user");
+    const stored = JSON.stringify([...await state.storage.list()]);
+    expect(stored).toContain("apple-service:");
+    expect(stored).not.toContain("private-user");
   });
 });
 
@@ -255,7 +259,7 @@ it("adds the service-owned Apple playlist to a listener library without creating
       spotifyUrl: null, appleUrl: "https://music.apple.com/us/song/123456" },
   });
   const canonicalUrl = "https://music.apple.com/us/playlist/shared/pl.service";
-  await env.DB.prepare(`UPDATE thread_publications SET connected = 1, status = 'synced', blocked_reason = NULL,
+  await env.DB.prepare(`UPDATE thread_publications SET connected = 1, service_owned = 1, status = 'synced', blocked_reason = NULL,
     applied_revision = requested_revision, verified_playlist_id = 'p.service', verified_playlist_url = ?
     WHERE provider = 'apple' AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
     .bind(canonicalUrl, view.publicCapability).run();
@@ -277,6 +281,7 @@ it("adds the service-owned Apple playlist to a listener library without creating
     if (method !== "GET") listenerMutations.push({ path: url.pathname, playlistId: url.searchParams.get("ids[playlists]"), token });
     if (url.pathname === "/v1/me/library") return new Response(null, { status: 202 });
     if (url.pathname === "/v1/catalog/us/playlists/pl.service/library") {
+      if (!listenerMutations.length) return Response.json({ data: [] });
       return Response.json({ data: [{ id: "p.listener", type: "library-playlists" }] });
     }
     if (url.pathname === "/v1/me/library/playlists") {
@@ -312,7 +317,7 @@ it("observes service-owned Apple playlist updates without mutating listener play
       spotifyUrl: null, appleUrl: "https://music.apple.com/us/song/123456" },
   });
   const canonicalUrl = "https://music.apple.com/us/playlist/shared/pl.service";
-  await env.DB.prepare(`UPDATE thread_publications SET connected = 1, status = 'synced', blocked_reason = NULL,
+  await env.DB.prepare(`UPDATE thread_publications SET connected = 1, service_owned = 1, status = 'synced', blocked_reason = NULL,
     applied_revision = requested_revision, verified_playlist_id = 'p.service', verified_playlist_url = ?
     WHERE provider = 'apple' AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
     .bind(canonicalUrl, view.publicCapability).run();
@@ -381,7 +386,7 @@ it("reports missing Apple listener authorization before attempting cross-provide
     track: { title: "Song", artist: "Artist", isrc: null, artworkUrl: null, complete: false,
       spotifyUrl: `https://open.spotify.com/track/${"S".repeat(22)}`, appleUrl: null },
   });
-  await env.DB.prepare(`UPDATE thread_publications SET connected = 1, status = 'synced', applied_revision = requested_revision,
+  await env.DB.prepare(`UPDATE thread_publications SET connected = 1, service_owned = 1, status = 'synced', applied_revision = requested_revision,
     verified_playlist_id = 'p.service', verified_playlist_url = 'https://music.apple.com/us/playlist/shared/pl.service'
     WHERE provider = 'apple' AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
     .bind(view.publicCapability).run();
@@ -574,7 +579,6 @@ it("rejects account credential access from another object and never falls back t
     const object = instance as unknown as ThreadPublisher;
     await expect(object.getAccountSpotifyToken("other")).rejects.toThrow("account_object_required");
     await expect(object.setAccountCredentials("other", "{}")).rejects.toThrow("account_object_required");
-    await expect(object.getAccountAppleCredentials("other")).rejects.toThrow("account_object_required");
     await expect(object.getAccountSpotifyToken(accountId)).rejects.toMatchObject({ status: 401 });
   });
   expect(fetch).not.toHaveBeenCalled();
@@ -641,6 +645,9 @@ it("reauthorizes an Apple listener without inspecting or taking ownership of the
   const view = await new D1ThreadStore(env.DB).create("Apple listener", nanoid(22));
   const { accountId, stub } = await accountFixture("apple", { teamId: "TEAM123456", musicUserToken: "old-user", storefront: "us" });
   const subscription = await accounts.subscribe(accountId, view.publicCapability);
+  await env.DB.prepare(`UPDATE thread_subscriptions SET status = 'synced', applied_revision = requested_revision,
+    verified_playlist_id = 'p.listener', verified_playlist_url = 'https://music.apple.com/us/playlist/shared/pl.service'
+    WHERE publisher_key = ?`).bind(subscription.publisherKey).run();
   const secrets = await applePublishingSecrets();
   await configure(stub, secrets);
   const requests: string[] = [];
@@ -655,11 +662,10 @@ it("reauthorizes an Apple listener without inspecting or taking ownership of the
   expect(requests).toEqual(["/v1/me/storefront"]);
   expect((await accounts.account(accountId))!.credentials).not.toMatch(/replacement-user|old-user/);
   expect(await accounts.subscription(accountId, view.publicCapability)).toMatchObject({
-    publisherKey: subscription.publisherKey, status: "pending", verifiedPlaylistId: null,
+    publisherKey: subscription.publisherKey, status: "pending", verifiedPlaylistId: "p.listener",
   });
   await runInDurableObject(stub, async instance => {
     const object = instance as unknown as ThreadPublisher;
-    expect((await object.getAccountAppleCredentials(accountId)).musicUserToken).toBe("replacement-user");
     await expect(object.authorizeAccountApple("other-account", "private")).rejects.toThrow("account_object_required");
     await expect(object.publishAppleSubscription("other-account", subscription.publisherKey)).rejects.toThrow("account_object_required");
   });

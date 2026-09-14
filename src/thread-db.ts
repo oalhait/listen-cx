@@ -104,7 +104,9 @@ export class D1ThreadStore {
       (SELECT json_group_array(json_object('provider', p.provider, 'requestedRevision', p.requested_revision,
         'appliedRevision', p.applied_revision, 'status', p.status, 'blockedReason', p.blocked_reason,
         'failureCode', p.failure_code, 'verifiedPlaylistId', p.verified_playlist_id,
-        'connected', json(CASE p.connected WHEN 1 THEN 'true' ELSE 'false' END), 'verifiedPlaylistUrl', p.verified_playlist_url))
+        'connected', json(CASE p.connected WHEN 1 THEN 'true' ELSE 'false' END),
+        'serviceOwned', json(CASE p.service_owned WHEN 1 THEN 'true' ELSE 'false' END),
+        'verifiedPlaylistUrl', p.verified_playlist_url))
        FROM thread_publications p WHERE p.thread_id = t.id) AS publications
       FROM threads t WHERE t.public_capability = ?`).bind(capability).first<SnapshotRow>();
     if (!row) return null;
@@ -253,7 +255,8 @@ export class D1ThreadStore {
       if (raced) return raced;
       throw new ThreadError(409, "stale_revision", "The Thread changed. Refresh and try again.");
     }
-    if ((intent.kind === "remove" || intent.kind === "reorder") && view.publications.some(p => p.provider === "apple" && p.connected)) {
+    if ((intent.kind === "remove" || intent.kind === "reorder")
+      && view.publications.some(p => p.provider === "apple" && p.connected && !p.serviceOwned)) {
       throw new ThreadError(409, "apple_append_only", "Apple Music supports additions only. Remove and reorder are unavailable for this Thread.");
     }
     if (intent.kind === "connect" && view.publications.some(p => p.provider === intent.provider && p.connected)) {
@@ -286,7 +289,7 @@ export class D1ThreadStore {
     const token = nanoid(22);
     const addCondition = intent.kind === "add" ? `AND (SELECT COUNT(*) FROM thread_contributions WHERE thread_id = threads.id) < ${THREAD_TOTAL_LIMIT}` : "";
     const editCondition = intent.kind === "remove" || intent.kind === "reorder"
-      ? "AND NOT EXISTS (SELECT 1 FROM thread_publications WHERE thread_id = threads.id AND provider = 'apple' AND connected = 1)" : "";
+      ? "AND NOT EXISTS (SELECT 1 FROM thread_publications WHERE thread_id = threads.id AND provider = 'apple' AND connected = 1 AND service_owned = 0)" : "";
     const identityCondition = intent.kind === "identify" ? `AND EXISTS (
       SELECT 1 FROM thread_contributions c WHERE c.id = ? AND c.thread_id = threads.id
       AND c.removed_at IS NULL AND c.source_verified = 1 AND c.source_provider != ?
