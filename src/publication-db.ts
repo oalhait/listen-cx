@@ -37,6 +37,11 @@ export class D1PublicationStore {
   async activateAppleServicePublications(): Promise<void> {
     const db = this.db.withSession("first-primary");
     await db.batch([
+      db.prepare(`UPDATE provider_service_migrations SET status = 'active' WHERE provider = 'apple'
+        AND NOT EXISTS (SELECT 1 FROM thread_subscriptions subscription
+          WHERE subscription.provider = 'apple' AND subscription.service_migration_pending = 1
+          AND NOT EXISTS (SELECT 1 FROM thread_publications service WHERE service.thread_id = subscription.thread_id
+            AND service.provider = 'apple' AND service.service_owned = 1 AND service.connected = 1))`),
       db.prepare(`UPDATE thread_publications SET connected = 1, status = 'pending', blocked_reason = NULL,
         failure_code = NULL, next_attempt_at = 0, service_migration_pending = 0,
         requested_revision = (SELECT revision FROM threads WHERE id = thread_publications.thread_id)
@@ -49,7 +54,6 @@ export class D1PublicationStore {
         WHERE provider = 'apple' AND service_migration_pending = 1
         AND EXISTS (SELECT 1 FROM thread_publications service WHERE service.thread_id = thread_subscriptions.thread_id
           AND service.provider = 'apple' AND service.service_owned = 1 AND service.connected = 1)`),
-      db.prepare("UPDATE provider_service_migrations SET status = 'active' WHERE provider = 'apple'"),
     ]);
   }
 

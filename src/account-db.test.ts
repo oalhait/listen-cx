@@ -174,6 +174,54 @@ it("migrates existing Apple subscribers away from personal playlist destinations
   });
 });
 
+it.each(["insert", "reconnect"] as const)("fences an Apple subscription %s made by the old Worker during rollout", async mode => {
+  const accounts = new D1AccountStore(env.DB);
+  const thread = await new D1ThreadStore(env.DB).create(`Rollout ${mode}`, nanoid(22));
+  const account = await accounts.upsert("apple", `rollout-${mode}`, "Listener");
+  const publisherKey = crypto.randomUUID();
+  if (mode === "reconnect") {
+    await env.DB.prepare(`INSERT INTO thread_subscriptions(account_id, thread_id, provider, publisher_key, connected, requested_revision)
+      SELECT ?, id, 'apple', ?, 0, revision FROM threads WHERE public_capability = ?`)
+      .bind(account.id, publisherKey, thread.publicCapability).run();
+  }
+  await env.DB.prepare("UPDATE provider_service_migrations SET status = 'pending' WHERE provider = 'apple'").run();
+
+  await env.DB.prepare(`INSERT INTO thread_subscriptions(account_id, thread_id, provider, publisher_key, requested_revision)
+    SELECT ?, id, 'apple', ?, revision FROM threads WHERE public_capability = ?
+    ON CONFLICT(account_id, thread_id) DO UPDATE SET connected = 1,
+      requested_revision = excluded.requested_revision, status = 'pending', blocked_reason = NULL,
+      failure_code = NULL, updated_at = datetime('now') WHERE thread_subscriptions.connected = 0`)
+    .bind(account.id, publisherKey, thread.publicCapability).run();
+
+  const subscription = await accounts.subscription(account.id, thread.publicCapability);
+  expect(subscription).toMatchObject({ connected: false, status: "blocked", blockedReason: "service_migration_pending",
+    nextAttemptAt: 32503680000000 });
+  const publications = new D1PublicationStore(env.DB);
+  expect(await publications.canonical(thread.publicCapability, "apple")).toMatchObject({
+    connected: true, status: "blocked",
+  });
+  expect((await publications.target((await env.DB.prepare(`SELECT publisher_key FROM thread_publications
+    WHERE provider = 'apple' AND thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
+    .bind(thread.publicCapability).first<string>("publisher_key"))!))!).toMatchObject({
+    serviceOwned: true, nextAttemptAt: 32503680000000,
+  });
+  expect(await env.DB.prepare(`SELECT kind, connected FROM apple_service_migration_backups
+    WHERE thread_id = (SELECT id FROM threads WHERE public_capability = ?) ORDER BY kind`)
+    .bind(thread.publicCapability).all()).toMatchObject({ results: [
+    { kind: "publication", connected: 0 }, { kind: "subscription", connected: 1 },
+  ] });
+
+  await publications.activateAppleServicePublications();
+
+  expect(await accounts.subscription(account.id, thread.publicCapability)).toMatchObject({ connected: true, status: "pending" });
+  expect(await publications.canonical(thread.publicCapability, "apple")).toMatchObject({ connected: true, status: "pending" });
+  expect(await env.DB.prepare("SELECT status FROM provider_service_migrations WHERE provider = 'apple'").first<string>("status"))
+    .toBe("active");
+  expect(await env.DB.prepare(`SELECT COUNT(*) AS count FROM apple_service_migration_backups
+    WHERE thread_id = (SELECT id FROM threads WHERE public_capability = ?)`)
+    .bind(thread.publicCapability).first<number>("count")).toBe(2);
+});
+
 it("does not let repeated Apple subscribe clear a shared publication block", async () => {
   const accounts = new D1AccountStore(env.DB);
   const thread = await new D1ThreadStore(env.DB).create("Blocked shared playlist", nanoid(22));

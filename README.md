@@ -385,6 +385,9 @@ its edit restriction remains in place, and the replacement uses a separate Durab
 Object journal. Converted rows remain blocked behind database triggers so the old
 Worker cannot process or reopen them during the migration-before-deploy window. The
 new Worker activates them only after the Apple service credentials are available.
+The migration retains the prior publication and subscription state in
+`apple_service_migration_backups`; use `docs/apple-service-rollback.sql` before
+redeploying the old Worker if the service rollout must be reversed.
 The account routes, including `/settings`, require `ACCOUNT_SUBSCRIPTIONS_ENABLED`.
 Before production, provision the dedicated account grant in staging and verify an
 actual shared-playlist create, listener library add, and provider readback. Then run
